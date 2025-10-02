@@ -1,0 +1,11 @@
+{
+  "name": "futures-trading-calculator",
+  "version": "1.0.0",
+  "description": "Futures leverage trading calculator with hedge mode",
+  "scripts": {
+    "deploy": "gh-pages -d ."
+  },
+  "devDependencies": {
+    "gh-pages": "^6.3.0"
+  }
+}
