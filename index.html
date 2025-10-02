@@ -63,11 +63,13 @@
 
         function App() {
             const [theme, setTheme] = useState(localStorage.getItem('theme') || 'light');
-            const [accountSize, setAccountSize] = useState(sessionStorage.getItem('accountSize') || '');
+            const [accountSize, setAccountSize] = useState(localStorage.getItem('accountSize') || '');
             const [trades, setTrades] = useState(() => {
-                const savedTrades = sessionStorage.getItem('trades');
+                const savedTrades = localStorage.getItem('trades');
                 return savedTrades ? JSON.parse(savedTrades) : [];
             });
+            const [showAddForm, setShowAddForm] = useState(false);
+            const [editingTradeIndex, setEditingTradeIndex] = useState(null);
             const cryptos = ['BTC', 'ETH'];
 
             useEffect(() => {
@@ -80,11 +82,11 @@
             }, [theme]);
 
             useEffect(() => {
-                sessionStorage.setItem('accountSize', accountSize);
+                localStorage.setItem('accountSize', accountSize);
             }, [accountSize]);
 
             useEffect(() => {
-                sessionStorage.setItem('trades', JSON.stringify(trades));
+                localStorage.setItem('trades', JSON.stringify(trades));
             }, [trades]);
 
             const toggleTheme = () => {
@@ -94,16 +96,149 @@
             const addTrade = (newTrade) => {
                 const notionalValue = newTrade.positionSize * newTrade.entryPrice;
                 const marginUsed = notionalValue / newTrade.leverage;
-                const liqPrice = newTrade.direction === 'long' 
+                const liqPrice = newTrade.direction === 'long'
                     ? newTrade.entryPrice * (1 - 1 / newTrade.leverage)
                     : newTrade.entryPrice * (1 + 1 / newTrade.leverage);
 
                 setTrades([...trades, { ...newTrade, notionalValue, marginUsed, liqPrice }]);
+                setShowAddForm(false);
+            };
+
+            const updateTrade = (index, updatedTrade) => {
+                const notionalValue = updatedTrade.positionSize * updatedTrade.entryPrice;
+                const marginUsed = notionalValue / updatedTrade.leverage;
+                const liqPrice = updatedTrade.direction === 'long'
+                    ? updatedTrade.entryPrice * (1 - 1 / updatedTrade.leverage)
+                    : updatedTrade.entryPrice * (1 + 1 / updatedTrade.leverage);
+
+                const newTrades = [...trades];
+                newTrades[index] = { ...updatedTrade, notionalValue, marginUsed, liqPrice };
+                setTrades(newTrades);
+                setEditingTradeIndex(null);
             };
 
             const deleteTrade = (index) => {
                 const newTrades = trades.filter((_, i) => i !== index);
                 setTrades(newTrades);
+                if (editingTradeIndex === index) {
+                    setEditingTradeIndex(null);
+                }
+            };
+
+            const formatUSD = (amount) => {
+                return new Intl.NumberFormat('en-US', {
+                    style: 'currency',
+                    currency: 'USD',
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2
+                }).format(amount);
+            };
+
+            const formatCurrencyInput = (value) => {
+                // Remove all non-numeric characters except decimal point
+                const numericValue = value.replace(/[^\d.]/g, '');
+                const parts = numericValue.split('.');
+
+                // Format the integer part with commas
+                if (parts[0]) {
+                    parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+                }
+
+                // Limit decimal places to 2
+                if (parts[1]) {
+                    parts[1] = parts[1].substring(0, 2);
+                }
+
+                return parts.join('.');
+            };
+
+            const parseCurrencyInput = (value) => {
+                // Remove commas and parse as float
+                return parseFloat(value.replace(/,/g, '')) || 0;
+            };
+
+            const calculateBreakevenPrice = (crypto) => {
+                const cryptoTrades = trades.filter(trade => trade.crypto === crypto);
+                if (cryptoTrades.length === 0) return null;
+
+                let totalLongSize = 0;
+                let totalShortSize = 0;
+                let totalLongValue = 0;
+                let totalShortValue = 0;
+
+                cryptoTrades.forEach(trade => {
+                    if (trade.direction === 'long') {
+                        totalLongSize += trade.positionSize;
+                        totalLongValue += trade.positionSize * trade.entryPrice;
+                    } else {
+                        totalShortSize += trade.positionSize;
+                        totalShortValue += trade.positionSize * trade.entryPrice;
+                    }
+                });
+
+                // If only long or only short positions, breakeven is weighted average entry price
+                if (totalShortSize === 0 && totalLongSize > 0) {
+                    return totalLongValue / totalLongSize;
+                }
+                if (totalLongSize === 0 && totalShortSize > 0) {
+                    return totalShortValue / totalShortSize;
+                }
+
+                // If both long and short positions exist, calculate net breakeven
+                const netSize = totalLongSize - totalShortSize;
+                const netValue = totalLongValue - totalShortValue;
+
+                if (Math.abs(netSize) < 0.0001) {
+                    // Positions are perfectly hedged
+                    return null;
+                }
+
+                return netValue / netSize;
+            };
+
+            const calculateLiquidationPrice = (crypto) => {
+                const cryptoTrades = trades.filter(trade => trade.crypto === crypto);
+                if (cryptoTrades.length === 0) return null;
+
+                let totalMarginUsed = 0;
+                let totalLongSize = 0;
+                let totalShortSize = 0;
+                let totalLongValue = 0;
+                let totalShortValue = 0;
+
+                cryptoTrades.forEach(trade => {
+                    totalMarginUsed += trade.marginUsed;
+                    if (trade.direction === 'long') {
+                        totalLongSize += trade.positionSize;
+                        totalLongValue += trade.positionSize * trade.entryPrice;
+                    } else {
+                        totalShortSize += trade.positionSize;
+                        totalShortValue += trade.positionSize * trade.entryPrice;
+                    }
+                });
+
+                const netSize = totalLongSize - totalShortSize;
+                const netValue = totalLongValue - totalShortValue;
+
+                if (Math.abs(netSize) < 0.0001) {
+                    // Positions are perfectly hedged - no liquidation price
+                    return null;
+                }
+
+                // Use account size if available, otherwise use margin used for this crypto
+                const accountSizeNum = parseCurrencyInput(accountSize);
+                const availableMargin = accountSizeNum > 0 ? accountSizeNum : totalMarginUsed;
+
+                // Calculate liquidation price where total loss equals available margin
+                // For net long position: liqPrice = (netValue - availableMargin) / netSize
+                // For net short position: liqPrice = (netValue + availableMargin) / netSize
+                if (netSize > 0) {
+                    // Net long position
+                    return (netValue - availableMargin) / netSize;
+                } else {
+                    // Net short position
+                    return (netValue + availableMargin) / netSize;
+                }
             };
 
             const calculateProfit = (crypto, targetPrice) => {
@@ -120,7 +255,8 @@
             };
 
             const totalMargin = trades.reduce((sum, trade) => sum + trade.marginUsed, 0);
-            const numericAccountSize = parseFloat(accountSize) || 0;
+            const numericAccountSize = parseCurrencyInput(accountSize);
+            const totalMarginRemaining = numericAccountSize > 0 ? Math.max(0, numericAccountSize - totalMargin) : 0;
             const showWarning = numericAccountSize > 0 && totalMargin > numericAccountSize;
 
             return (
@@ -138,49 +274,135 @@
                     {/* Account Size */}
                     <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow mb-6">
                         <label htmlFor="account-size" className="block text-lg font-semibold mb-2">Account Size (USD)</label>
-                        <input 
-                            id="account-size" 
-                            type="number" 
-                            step="0.01" 
-                            min="0" 
-                            placeholder="Enter account size" 
+                        <input
+                            id="account-size"
+                            type="text"
+                            placeholder="0.00"
                             className="w-full p-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
                             value={accountSize}
-                            onChange={(e) => setAccountSize(e.target.value)}
+                            onChange={(e) => setAccountSize(formatCurrencyInput(e.target.value))}
                         />
                     </div>
 
-                    {/* Add Trade */}
-                    <AddTradeForm addTrade={addTrade} />
+                    {/* Open Trades - Always visible */}
+                    <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow mb-6">
+                        <div className="flex justify-between items-center mb-4">
+                            <h2 className="text-xl font-semibold">Open Trades</h2>
+                            <button
+                                onClick={() => setShowAddForm(!showAddForm)}
+                                className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 transition"
+                            >
+                                {showAddForm ? 'Cancel' : 'Add Trade'}
+                            </button>
+                        </div>
 
-                    {/* Trades List */}
-                    {trades.length > 0 && (
-                        <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow mb-6">
-                            <h2 className="text-xl font-semibold mb-4">Open Trades</h2>
-                            <div className="space-y-4">
+                        {/* Add Trade Form - Conditionally shown */}
+                        {showAddForm && (
+                            <div className="mb-6 p-4 border rounded dark:border-gray-600 bg-gray-50 dark:bg-gray-700">
+                                <AddTradeForm addTrade={addTrade} />
+                            </div>
+                        )}
+
+                        {/* Edit Trade Form - Conditionally shown */}
+                        {editingTradeIndex !== null && (
+                            <div className="mb-6 p-4 border rounded dark:border-gray-600 bg-gray-50 dark:bg-gray-700">
+                                <EditTradeForm
+                                    trade={trades[editingTradeIndex]}
+                                    updateTrade={(updatedTrade) => updateTrade(editingTradeIndex, updatedTrade)}
+                                    onCancel={() => setEditingTradeIndex(null)}
+                                />
+                            </div>
+                        )}
+
+                        {trades.length === 0 ? (
+                            <p className="text-gray-500 dark:text-gray-400 text-center py-8">
+                                No open trades. Click "Add Trade" to get started.
+                            </p>
+                        ) : (
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                                 {trades.map((trade, index) => (
-                                    <div key={index} className="border p-3 rounded dark:border-gray-700">
-                                        <p><strong>Trade {index + 1}:</strong> {trade.crypto} - {trade.direction.charAt(0).toUpperCase() + trade.direction.slice(1)}</p>
-                                        <p>Size: {trade.positionSize.toFixed(4)} - Entry: ${trade.entryPrice.toFixed(2)}</p>
-                                        <p>Leverage: {trade.leverage.toFixed(1)}x - Margin: ${trade.marginUsed.toFixed(2)}</p>
-                                        <p>Est. Liq Price: ${trade.liqPrice.toFixed(2)}</p>
-                                        <button 
-                                            onClick={() => deleteTrade(index)} 
-                                            className="text-red-500 hover:underline"
-                                        >
-                                            Delete
-                                        </button>
+                                    <div key={index} className="border p-4 rounded-lg border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-sm hover:shadow-md dark:hover:shadow-lg transition-shadow">
+                                        <div className="flex justify-between items-start mb-3">
+                                            <div className="flex items-center space-x-2">
+                                                <span className="text-lg font-bold text-gray-800 dark:text-gray-200">
+                                                    {trade.crypto}
+                                                </span>
+                                                <span className={`px-2 py-1 rounded text-xs font-medium ${
+                                                    trade.direction === 'long'
+                                                        ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
+                                                        : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+                                                }`}>
+                                                    {trade.direction.toUpperCase()}
+                                                </span>
+                                            </div>
+                                            <span className="text-sm text-gray-500 dark:text-gray-400">
+                                                #{index + 1}
+                                            </span>
+                                        </div>
+
+                                        <div className="space-y-2 mb-4">
+                                            <div className="flex justify-between">
+                                                <span className="text-sm text-gray-600 dark:text-gray-400">Size:</span>
+                                                <span className="text-sm font-medium">{trade.positionSize.toFixed(4)}</span>
+                                            </div>
+                                            <div className="flex justify-between">
+                                                <span className="text-sm text-gray-600 dark:text-gray-400">Entry:</span>
+                                                <span className="text-sm font-medium">{formatUSD(trade.entryPrice)}</span>
+                                            </div>
+                                            <div className="flex justify-between">
+                                                <span className="text-sm text-gray-600 dark:text-gray-400">Leverage:</span>
+                                                <span className="text-sm font-medium">{trade.leverage.toFixed(1)}x</span>
+                                            </div>
+                                            <div className="flex justify-between">
+                                                <span className="text-sm text-gray-600 dark:text-gray-400">Margin:</span>
+                                                <span className="text-sm font-medium">{formatUSD(trade.marginUsed)}</span>
+                                            </div>
+                                            <div className="flex justify-between">
+                                                <span className="text-sm text-gray-600 dark:text-gray-400">Liq Price:</span>
+                                                <span className="text-sm font-medium text-red-600 dark:text-red-400">
+                                                    {formatUSD(trade.liqPrice)}
+                                                </span>
+                                            </div>
+                                        </div>
+
+                                        <div className="flex space-x-2">
+                                            <button
+                                                onClick={() => setEditingTradeIndex(index)}
+                                                className="flex-1 bg-blue-500 text-white text-sm py-2 px-3 rounded hover:bg-blue-600 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                                                disabled={editingTradeIndex !== null}
+                                            >
+                                                Edit
+                                            </button>
+                                            <button
+                                                onClick={() => deleteTrade(index)}
+                                                className="flex-1 bg-red-500 text-white text-sm py-2 px-3 rounded hover:bg-red-600 transition"
+                                            >
+                                                Delete
+                                            </button>
+                                        </div>
                                     </div>
                                 ))}
                             </div>
-                            <p className="mt-4 font-semibold">Total Margin Used: ${totalMargin.toFixed(2)} USD</p>
-                            {showWarning && (
-                                <p className="mt-2 text-red-500">
-                                    Warning: Total margin (${totalMargin.toFixed(2)} USD) exceeds account size (${numericAccountSize.toFixed(2)} USD)!
-                                </p>
-                            )}
-                        </div>
-                    )}
+                        )}
+
+                        {trades.length > 0 && (
+                            <>
+                                <div className="mt-4 flex justify-between items-center">
+                                    <p className="font-semibold">Total Margin Used: {formatUSD(totalMargin)}</p>
+                                    {numericAccountSize > 0 && (
+                                        <p className="font-semibold text-green-600 dark:text-green-400">
+                                            Total Margin Remaining: {formatUSD(totalMarginRemaining)}
+                                        </p>
+                                    )}
+                                </div>
+                                {showWarning && (
+                                    <p className="mt-2 text-red-500">
+                                        Warning: Total margin ({formatUSD(totalMargin)}) exceeds account size ({formatUSD(numericAccountSize)})!
+                                    </p>
+                                )}
+                            </>
+                        )}
+                    </div>
 
                     {/* Price Targets */}
                     {trades.length > 0 && (
@@ -189,11 +411,16 @@
                             {cryptos.map(crypto => {
                                 const cryptoTrades = trades.filter(trade => trade.crypto === crypto);
                                 if (cryptoTrades.length === 0) return null;
+                                const breakevenPrice = calculateBreakevenPrice(crypto);
+                                const liquidationPrice = calculateLiquidationPrice(crypto);
                                 return (
-                                    <PriceTargetSection 
-                                        key={crypto} 
-                                        crypto={crypto} 
-                                        calculateProfit={(targetPrice) => calculateProfit(crypto, targetPrice)} 
+                                    <PriceTargetSection
+                                        key={crypto}
+                                        crypto={crypto}
+                                        breakevenPrice={breakevenPrice}
+                                        liquidationPrice={liquidationPrice}
+                                        calculateProfit={(targetPrice) => calculateProfit(crypto, targetPrice)}
+                                        formatUSD={formatUSD}
                                     />
                                 );
                             })}
@@ -212,11 +439,11 @@
 
             const handleSubmit = (e) => {
                 e.preventDefault();
-                const ep = parseFloat(entryPrice);
+                const ep = parseCurrencyInput(entryPrice);
                 const ps = parseFloat(positionSize);
                 const lev = parseFloat(leverage);
-                if (isNaN(ep) || isNaN(ps) || isNaN(lev) || lev <= 0) {
-                    alert('Please enter valid numbers for entry price, position size, and leverage (leverage > 0).');
+                if (isNaN(ep) || isNaN(ps) || isNaN(lev) || lev <= 0 || ep <= 0) {
+                    alert('Please enter valid numbers for entry price, position size, and leverage (all must be greater than 0).');
                     return;
                 }
                 addTrade({ crypto, direction, entryPrice: ep, positionSize: ps, leverage: lev });
@@ -226,13 +453,13 @@
             };
 
             return (
-                <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow mb-6">
-                    <h2 className="text-xl font-semibold mb-4">Add Trade</h2>
+                <div>
+                    <h3 className="text-lg font-semibold mb-4">Add New Trade</h3>
                     <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
-                            <label htmlFor="crypto" className="block mb-1">Cryptocurrency</label>
-                            <select 
-                                id="crypto" 
+                            <label htmlFor="add-crypto" className="block mb-1">Cryptocurrency</label>
+                            <select
+                                id="add-crypto"
                                 className="w-full p-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
                                 value={crypto}
                                 onChange={(e) => setCrypto(e.target.value)}
@@ -242,9 +469,9 @@
                             </select>
                         </div>
                         <div>
-                            <label htmlFor="direction" className="block mb-1">Direction</label>
-                            <select 
-                                id="direction" 
+                            <label htmlFor="add-direction" className="block mb-1">Direction</label>
+                            <select
+                                id="add-direction"
                                 className="w-full p-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
                                 value={direction}
                                 onChange={(e) => setDirection(e.target.value)}
@@ -254,48 +481,46 @@
                             </select>
                         </div>
                         <div>
-                            <label htmlFor="entry-price" className="block mb-1">Average Entry Price (USD)</label>
-                            <input 
-                                id="entry-price" 
-                                type="number" 
-                                step="0.01" 
-                                min="0" 
-                                placeholder="Entry price" 
+                            <label htmlFor="add-entry-price" className="block mb-1">Average Entry Price (USD)</label>
+                            <input
+                                id="add-entry-price"
+                                type="text"
+                                placeholder="0.00"
                                 className="w-full p-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
                                 value={entryPrice}
-                                onChange={(e) => setEntryPrice(e.target.value)}
+                                onChange={(e) => setEntryPrice(formatCurrencyInput(e.target.value))}
                             />
                         </div>
                         <div>
-                            <label htmlFor="position-size" className="block mb-1">Position Size (Crypto Units)</label>
-                            <input 
-                                id="position-size" 
-                                type="number" 
-                                step="0.0001" 
-                                min="0" 
-                                placeholder="Position size" 
+                            <label htmlFor="add-position-size" className="block mb-1">Position Size (Crypto Units)</label>
+                            <input
+                                id="add-position-size"
+                                type="number"
+                                step="0.0001"
+                                min="0"
+                                placeholder="Position size"
                                 className="w-full p-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
                                 value={positionSize}
                                 onChange={(e) => setPositionSize(e.target.value)}
                             />
                         </div>
                         <div>
-                            <label htmlFor="leverage" className="block mb-1">Leverage</label>
-                            <input 
-                                id="leverage" 
-                                type="number" 
-                                step="0.1" 
-                                min="1" 
-                                placeholder="Leverage" 
+                            <label htmlFor="add-leverage" className="block mb-1">Leverage</label>
+                            <input
+                                id="add-leverage"
+                                type="number"
+                                step="0.1"
+                                min="1"
+                                placeholder="Leverage"
                                 className="w-full p-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
                                 value={leverage}
                                 onChange={(e) => setLeverage(e.target.value)}
                             />
                         </div>
                         <div className="md:col-span-2">
-                            <button 
-                                type="submit" 
-                                className="w-full md:w-auto mt-2 bg-blue-500 text-white p-2 rounded hover:bg-blue-600 transition"
+                            <button
+                                type="submit"
+                                className="w-full md:w-auto mt-2 bg-green-500 text-white p-2 rounded hover:bg-green-600 transition"
                             >
                                 Add Trade
                             </button>
@@ -305,14 +530,118 @@
             );
         }
 
-        function PriceTargetSection({ crypto, calculateProfit }) {
+        function EditTradeForm({ trade, updateTrade, onCancel }) {
+            const [crypto, setCrypto] = useState(trade.crypto);
+            const [direction, setDirection] = useState(trade.direction);
+            const [entryPrice, setEntryPrice] = useState(formatCurrencyInput(trade.entryPrice.toString()));
+            const [positionSize, setPositionSize] = useState(trade.positionSize.toString());
+            const [leverage, setLeverage] = useState(trade.leverage.toString());
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                const ep = parseCurrencyInput(entryPrice);
+                const ps = parseFloat(positionSize);
+                const lev = parseFloat(leverage);
+                if (isNaN(ep) || isNaN(ps) || isNaN(lev) || lev <= 0 || ep <= 0) {
+                    alert('Please enter valid numbers for entry price, position size, and leverage (all must be greater than 0).');
+                    return;
+                }
+                updateTrade({ crypto, direction, entryPrice: ep, positionSize: ps, leverage: lev });
+            };
+
+            return (
+                <div>
+                    <h3 className="text-lg font-semibold mb-4">Edit Trade</h3>
+                    <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label htmlFor="edit-crypto" className="block mb-1">Cryptocurrency</label>
+                            <select
+                                id="edit-crypto"
+                                className="w-full p-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
+                                value={crypto}
+                                onChange={(e) => setCrypto(e.target.value)}
+                            >
+                                <option value="BTC">BTC</option>
+                                <option value="ETH">ETH</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label htmlFor="edit-direction" className="block mb-1">Direction</label>
+                            <select
+                                id="edit-direction"
+                                className="w-full p-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
+                                value={direction}
+                                onChange={(e) => setDirection(e.target.value)}
+                            >
+                                <option value="long">Long</option>
+                                <option value="short">Short</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label htmlFor="edit-entry-price" className="block mb-1">Average Entry Price (USD)</label>
+                            <input
+                                id="edit-entry-price"
+                                type="text"
+                                placeholder="0.00"
+                                className="w-full p-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
+                                value={entryPrice}
+                                onChange={(e) => setEntryPrice(formatCurrencyInput(e.target.value))}
+                            />
+                        </div>
+                        <div>
+                            <label htmlFor="edit-position-size" className="block mb-1">Position Size (Crypto Units)</label>
+                            <input
+                                id="edit-position-size"
+                                type="number"
+                                step="0.0001"
+                                min="0"
+                                placeholder="Position size"
+                                className="w-full p-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
+                                value={positionSize}
+                                onChange={(e) => setPositionSize(e.target.value)}
+                            />
+                        </div>
+                        <div>
+                            <label htmlFor="edit-leverage" className="block mb-1">Leverage</label>
+                            <input
+                                id="edit-leverage"
+                                type="number"
+                                step="0.1"
+                                min="1"
+                                placeholder="Leverage"
+                                className="w-full p-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
+                                value={leverage}
+                                onChange={(e) => setLeverage(e.target.value)}
+                            />
+                        </div>
+                        <div className="md:col-span-2 space-x-2">
+                            <button
+                                type="submit"
+                                className="mt-2 bg-green-500 text-white p-2 rounded hover:bg-green-600 transition"
+                            >
+                                Save Changes
+                            </button>
+                            <button
+                                type="button"
+                                onClick={onCancel}
+                                className="mt-2 bg-gray-500 text-white p-2 rounded hover:bg-gray-600 transition"
+                            >
+                                Cancel
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            );
+        }
+
+        function PriceTargetSection({ crypto, breakevenPrice, liquidationPrice, calculateProfit, formatUSD }) {
             const [targetPrice, setTargetPrice] = useState('');
             const [profitData, setProfitData] = useState(null);
 
             const handleCalculate = () => {
-                const tp = parseFloat(targetPrice);
-                if (isNaN(tp)) {
-                    alert('Please enter a valid target price.');
+                const tp = parseCurrencyInput(targetPrice);
+                if (isNaN(tp) || tp <= 0) {
+                    alert('Please enter a valid target price greater than 0.');
                     return;
                 }
                 const data = calculateProfit(tp);
@@ -320,34 +649,93 @@
             };
 
             return (
-                <div className="mb-6">
-                    <h3 className="text-lg font-semibold mb-2">{crypto} Price Targets</h3>
-                    <div className="flex flex-col md:flex-row space-y-2 md:space-y-0 md:space-x-2">
-                        <input 
-                            type="number" 
-                            step="0.01" 
-                            min="0" 
-                            placeholder="Target price (USD)" 
+                <div className="mb-6 p-4 border rounded-lg border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700">
+                    <h3 className="text-lg font-semibold mb-3">{crypto} Price Targets</h3>
+
+                    {/* Breakeven and Liquidation Price Display */}
+                    <div className="mb-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {/* Breakeven Price */}
+                        {breakevenPrice !== null ? (
+                            <div className="p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded">
+                                <p className="text-sm font-medium text-blue-800 dark:text-blue-200">
+                                    <span className="font-semibold">Breakeven Price:</span> {formatUSD(breakevenPrice)}
+                                </p>
+                                <p className="text-xs text-blue-600 dark:text-blue-300 mt-1">
+                                    Price where all {crypto} positions break even
+                                </p>
+                            </div>
+                        ) : (
+                            <div className="p-3 bg-gray-100 dark:bg-gray-600 border border-gray-300 dark:border-gray-500 rounded">
+                                <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                                    <span className="font-semibold">Breakeven Price:</span> N/A
+                                </p>
+                                <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+                                    Positions are perfectly hedged
+                                </p>
+                            </div>
+                        )}
+
+                        {/* Liquidation Price */}
+                        {liquidationPrice !== null ? (
+                            <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded">
+                                <p className="text-sm font-medium text-red-800 dark:text-red-200">
+                                    <span className="font-semibold">Liquidation Price:</span> {formatUSD(liquidationPrice)}
+                                </p>
+                                <p className="text-xs text-red-600 dark:text-red-300 mt-1">
+                                    Price where entire {crypto} position gets liquidated
+                                </p>
+                            </div>
+                        ) : (
+                            <div className="p-3 bg-gray-100 dark:bg-gray-600 border border-gray-300 dark:border-gray-500 rounded">
+                                <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                                    <span className="font-semibold">Liquidation Price:</span> N/A
+                                </p>
+                                <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+                                    Positions are perfectly hedged
+                                </p>
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="flex flex-col md:flex-row space-y-2 md:space-y-0 md:space-x-2 mb-3">
+                        <input
+                            type="text"
+                            placeholder="0.00"
                             className="flex-grow p-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
                             value={targetPrice}
-                            onChange={(e) => setTargetPrice(e.target.value)}
+                            onChange={(e) => setTargetPrice(formatCurrencyInput(e.target.value))}
                         />
-                        <button 
-                            onClick={handleCalculate} 
+                        <button
+                            onClick={handleCalculate}
                             className="bg-green-500 text-white p-2 rounded hover:bg-green-600 transition"
                         >
                             Calculate
                         </button>
                     </div>
+
                     {profitData && (
-                        <div className="mt-2">
-                            <p><strong>Profits at ${parseFloat(targetPrice).toFixed(2)}:</strong></p>
-                            {profitData.profits.map((item, index) => (
-                                <p key={index}>
-                                    {item.direction.charAt(0).toUpperCase() + item.direction.slice(1)} trade (Entry ${item.entryPrice.toFixed(2)}): Profit ${item.profit.toFixed(2)}
+                        <div className="mt-3 p-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded">
+                            <p className="font-semibold mb-2">Profits at {formatUSD(parseCurrencyInput(targetPrice))}:</p>
+                            <div className="space-y-1 text-sm">
+                                {profitData.profits.map((item, index) => (
+                                    <p key={index} className="flex justify-between">
+                                        <span>
+                                            {item.direction.charAt(0).toUpperCase() + item.direction.slice(1)} trade (Entry {formatUSD(item.entryPrice)}):
+                                        </span>
+                                        <span className={`font-medium ${item.profit >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                                            {formatUSD(item.profit)}
+                                        </span>
+                                    </p>
+                                ))}
+                            </div>
+                            <div className="mt-3 pt-2 border-t border-gray-200 dark:border-gray-600">
+                                <p className="flex justify-between font-semibold">
+                                    <span>Total Profit for {crypto}:</span>
+                                    <span className={`${profitData.totalProfit >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                                        {formatUSD(profitData.totalProfit)}
+                                    </span>
                                 </p>
-                            ))}
-                            <p><strong>Total Profit for {crypto}:</strong> ${profitData.totalProfit.toFixed(2)}</p>
+                            </div>
                         </div>
                     )}
                 </div>
