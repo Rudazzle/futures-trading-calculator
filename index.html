@@ -1,0 +1,360 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Futures Leverage Trading Calculator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {},
+            }
+        }
+    </script>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 font-sans transition-colors duration-200">
+    <div id="root"></div>
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        function App() {
+            const [theme, setTheme] = useState(localStorage.getItem('theme') || 'light');
+            const [accountSize, setAccountSize] = useState(sessionStorage.getItem('accountSize') || '');
+            const [trades, setTrades] = useState(() => {
+                const savedTrades = sessionStorage.getItem('trades');
+                return savedTrades ? JSON.parse(savedTrades) : [];
+            });
+            const cryptos = ['BTC', 'ETH'];
+
+            useEffect(() => {
+                if (theme === 'dark') {
+                    document.documentElement.classList.add('dark');
+                } else {
+                    document.documentElement.classList.remove('dark');
+                }
+                localStorage.setItem('theme', theme);
+            }, [theme]);
+
+            useEffect(() => {
+                sessionStorage.setItem('accountSize', accountSize);
+            }, [accountSize]);
+
+            useEffect(() => {
+                sessionStorage.setItem('trades', JSON.stringify(trades));
+            }, [trades]);
+
+            const toggleTheme = () => {
+                setTheme(theme === 'light' ? 'dark' : 'light');
+            };
+
+            const addTrade = (newTrade) => {
+                const notionalValue = newTrade.positionSize * newTrade.entryPrice;
+                const marginUsed = notionalValue / newTrade.leverage;
+                const liqPrice = newTrade.direction === 'long' 
+                    ? newTrade.entryPrice * (1 - 1 / newTrade.leverage)
+                    : newTrade.entryPrice * (1 + 1 / newTrade.leverage);
+
+                setTrades([...trades, { ...newTrade, notionalValue, marginUsed, liqPrice }]);
+            };
+
+            const deleteTrade = (index) => {
+                const newTrades = trades.filter((_, i) => i !== index);
+                setTrades(newTrades);
+            };
+
+            const calculateProfit = (crypto, targetPrice) => {
+                const cryptoTrades = trades.filter(trade => trade.crypto === crypto);
+                let totalProfit = 0;
+                const profits = cryptoTrades.map(trade => {
+                    const profit = trade.direction === 'long'
+                        ? trade.positionSize * (targetPrice - trade.entryPrice)
+                        : trade.positionSize * (trade.entryPrice - targetPrice);
+                    totalProfit += profit;
+                    return { ...trade, profit };
+                });
+                return { profits, totalProfit };
+            };
+
+            const totalMargin = trades.reduce((sum, trade) => sum + trade.marginUsed, 0);
+            const numericAccountSize = parseFloat(accountSize) || 0;
+            const showWarning = numericAccountSize > 0 && totalMargin > numericAccountSize;
+
+            return (
+                <div className="container mx-auto p-4 max-w-4xl">
+                    <header className="flex justify-between items-center mb-6">
+                        <h1 className="text-3xl font-bold">Futures Leverage Trading Calculator</h1>
+                        <button 
+                            onClick={toggleTheme}
+                            className="p-2 rounded-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition"
+                        >
+                            {theme === 'light' ? '🌙' : '☀️'}
+                        </button>
+                    </header>
+
+                    {/* Account Size */}
+                    <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow mb-6">
+                        <label htmlFor="account-size" className="block text-lg font-semibold mb-2">Account Size (USD)</label>
+                        <input 
+                            id="account-size" 
+                            type="number" 
+                            step="0.01" 
+                            min="0" 
+                            placeholder="Enter account size" 
+                            className="w-full p-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
+                            value={accountSize}
+                            onChange={(e) => setAccountSize(e.target.value)}
+                        />
+                    </div>
+
+                    {/* Add Trade */}
+                    <AddTradeForm addTrade={addTrade} />
+
+                    {/* Trades List */}
+                    {trades.length > 0 && (
+                        <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow mb-6">
+                            <h2 className="text-xl font-semibold mb-4">Open Trades</h2>
+                            <div className="space-y-4">
+                                {trades.map((trade, index) => (
+                                    <div key={index} className="border p-3 rounded dark:border-gray-700">
+                                        <p><strong>Trade {index + 1}:</strong> {trade.crypto} - {trade.direction.charAt(0).toUpperCase() + trade.direction.slice(1)}</p>
+                                        <p>Size: {trade.positionSize.toFixed(4)} - Entry: ${trade.entryPrice.toFixed(2)}</p>
+                                        <p>Leverage: {trade.leverage.toFixed(1)}x - Margin: ${trade.marginUsed.toFixed(2)}</p>
+                                        <p>Est. Liq Price: ${trade.liqPrice.toFixed(2)}</p>
+                                        <button 
+                                            onClick={() => deleteTrade(index)} 
+                                            className="text-red-500 hover:underline"
+                                        >
+                                            Delete
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                            <p className="mt-4 font-semibold">Total Margin Used: ${totalMargin.toFixed(2)} USD</p>
+                            {showWarning && (
+                                <p className="mt-2 text-red-500">
+                                    Warning: Total margin (${totalMargin.toFixed(2)} USD) exceeds account size (${numericAccountSize.toFixed(2)} USD)!
+                                </p>
+                            )}
+                        </div>
+                    )}
+
+                    {/* Price Targets */}
+                    {trades.length > 0 && (
+                        <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow mb-6">
+                            <h2 className="text-xl font-semibold mb-4">Price Targets</h2>
+                            {cryptos.map(crypto => {
+                                const cryptoTrades = trades.filter(trade => trade.crypto === crypto);
+                                if (cryptoTrades.length === 0) return null;
+                                return (
+                                    <PriceTargetSection 
+                                        key={crypto} 
+                                        crypto={crypto} 
+                                        calculateProfit={(targetPrice) => calculateProfit(crypto, targetPrice)} 
+                                    />
+                                );
+                            })}
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        function AddTradeForm({ addTrade }) {
+            const [crypto, setCrypto] = useState('BTC');
+            const [direction, setDirection] = useState('long');
+            const [entryPrice, setEntryPrice] = useState('');
+            const [positionSize, setPositionSize] = useState('');
+            const [leverage, setLeverage] = useState('');
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                const ep = parseFloat(entryPrice);
+                const ps = parseFloat(positionSize);
+                const lev = parseFloat(leverage);
+                if (isNaN(ep) || isNaN(ps) || isNaN(lev) || lev <= 0) {
+                    alert('Please enter valid numbers for entry price, position size, and leverage (leverage > 0).');
+                    return;
+                }
+                addTrade({ crypto, direction, entryPrice: ep, positionSize: ps, leverage: lev });
+                setEntryPrice('');
+                setPositionSize('');
+                setLeverage('');
+            };
+
+            return (
+                <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow mb-6">
+                    <h2 className="text-xl font-semibold mb-4">Add Trade</h2>
+                    <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label htmlFor="crypto" className="block mb-1">Cryptocurrency</label>
+                            <select 
+                                id="crypto" 
+                                className="w-full p-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
+                                value={crypto}
+                                onChange={(e) => setCrypto(e.target.value)}
+                            >
+                                <option value="BTC">BTC</option>
+                                <option value="ETH">ETH</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label htmlFor="direction" className="block mb-1">Direction</label>
+                            <select 
+                                id="direction" 
+                                className="w-full p-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
+                                value={direction}
+                                onChange={(e) => setDirection(e.target.value)}
+                            >
+                                <option value="long">Long</option>
+                                <option value="short">Short</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label htmlFor="entry-price" className="block mb-1">Average Entry Price (USD)</label>
+                            <input 
+                                id="entry-price" 
+                                type="number" 
+                                step="0.01" 
+                                min="0" 
+                                placeholder="Entry price" 
+                                className="w-full p-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
+                                value={entryPrice}
+                                onChange={(e) => setEntryPrice(e.target.value)}
+                            />
+                        </div>
+                        <div>
+                            <label htmlFor="position-size" className="block mb-1">Position Size (Crypto Units)</label>
+                            <input 
+                                id="position-size" 
+                                type="number" 
+                                step="0.0001" 
+                                min="0" 
+                                placeholder="Position size" 
+                                className="w-full p-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
+                                value={positionSize}
+                                onChange={(e) => setPositionSize(e.target.value)}
+                            />
+                        </div>
+                        <div>
+                            <label htmlFor="leverage" className="block mb-1">Leverage</label>
+                            <input 
+                                id="leverage" 
+                                type="number" 
+                                step="0.1" 
+                                min="1" 
+                                placeholder="Leverage" 
+                                className="w-full p-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
+                                value={leverage}
+                                onChange={(e) => setLeverage(e.target.value)}
+                            />
+                        </div>
+                        <div className="md:col-span-2">
+                            <button 
+                                type="submit" 
+                                className="w-full md:w-auto mt-2 bg-blue-500 text-white p-2 rounded hover:bg-blue-600 transition"
+                            >
+                                Add Trade
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            );
+        }
+
+        function PriceTargetSection({ crypto, calculateProfit }) {
+            const [targetPrice, setTargetPrice] = useState('');
+            const [profitData, setProfitData] = useState(null);
+
+            const handleCalculate = () => {
+                const tp = parseFloat(targetPrice);
+                if (isNaN(tp)) {
+                    alert('Please enter a valid target price.');
+                    return;
+                }
+                const data = calculateProfit(tp);
+                setProfitData(data);
+            };
+
+            return (
+                <div className="mb-6">
+                    <h3 className="text-lg font-semibold mb-2">{crypto} Price Targets</h3>
+                    <div className="flex flex-col md:flex-row space-y-2 md:space-y-0 md:space-x-2">
+                        <input 
+                            type="number" 
+                            step="0.01" 
+                            min="0" 
+                            placeholder="Target price (USD)" 
+                            className="flex-grow p-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
+                            value={targetPrice}
+                            onChange={(e) => setTargetPrice(e.target.value)}
+                        />
+                        <button 
+                            onClick={handleCalculate} 
+                            className="bg-green-500 text-white p-2 rounded hover:bg-green-600 transition"
+                        >
+                            Calculate
+                        </button>
+                    </div>
+                    {profitData && (
+                        <div className="mt-2">
+                            <p><strong>Profits at ${parseFloat(targetPrice).toFixed(2)}:</strong></p>
+                            {profitData.profits.map((item, index) => (
+                                <p key={index}>
+                                    {item.direction.charAt(0).toUpperCase() + item.direction.slice(1)} trade (Entry ${item.entryPrice.toFixed(2)}): Profit ${item.profit.toFixed(2)}
+                                </p>
+                            ))}
+                            <p><strong>Total Profit for {crypto}:</strong> ${profitData.totalProfit.toFixed(2)}</p>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>
