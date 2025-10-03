@@ -72,6 +72,10 @@
             const [editingTradeIndex, setEditingTradeIndex] = useState(null);
             const [livePrices, setLivePrices] = useState({});
             const [lastPriceUpdate, setLastPriceUpdate] = useState(null);
+            const [priceTargets, setPriceTargets] = useState(() => {
+                const savedTargets = localStorage.getItem('priceTargets');
+                return savedTargets ? JSON.parse(savedTargets) : {};
+            });
             const cryptos = ['BTC', 'ETH'];
 
             useEffect(() => {
@@ -89,7 +93,13 @@
 
             useEffect(() => {
                 localStorage.setItem('trades', JSON.stringify(trades));
+                // Recalculate all price targets when trades change
+                recalculateAllPriceTargets();
             }, [trades]);
+
+            useEffect(() => {
+                localStorage.setItem('priceTargets', JSON.stringify(priceTargets));
+            }, [priceTargets]);
 
             // Fetch live prices from CoinGecko API
             const fetchLivePrices = async () => {
@@ -289,6 +299,54 @@
                 return calculateProfit(crypto, currentPrice);
             };
 
+            const addPriceTarget = (crypto, targetPrice) => {
+                const targetId = Date.now().toString();
+                const profitData = calculateProfit(crypto, targetPrice);
+
+                setPriceTargets(prev => ({
+                    ...prev,
+                    [crypto]: {
+                        ...prev[crypto],
+                        [targetId]: {
+                            id: targetId,
+                            targetPrice: targetPrice,
+                            profitData: profitData,
+                            createdAt: new Date().toISOString()
+                        }
+                    }
+                }));
+            };
+
+            const removePriceTarget = (crypto, targetId) => {
+                setPriceTargets(prev => {
+                    const newTargets = { ...prev };
+                    if (newTargets[crypto]) {
+                        delete newTargets[crypto][targetId];
+                        if (Object.keys(newTargets[crypto]).length === 0) {
+                            delete newTargets[crypto];
+                        }
+                    }
+                    return newTargets;
+                });
+            };
+
+            const recalculateAllPriceTargets = () => {
+                setPriceTargets(prev => {
+                    const newTargets = { ...prev };
+                    Object.keys(newTargets).forEach(crypto => {
+                        Object.keys(newTargets[crypto]).forEach(targetId => {
+                            const target = newTargets[crypto][targetId];
+                            const updatedProfitData = calculateProfit(crypto, target.targetPrice);
+                            newTargets[crypto][targetId] = {
+                                ...target,
+                                profitData: updatedProfitData
+                            };
+                        });
+                    });
+                    return newTargets;
+                });
+            };
+
             const totalMargin = trades.reduce((sum, trade) => sum + trade.marginUsed, 0);
             const numericAccountSize = parseCurrencyInput(accountSize);
             const totalMarginRemaining = numericAccountSize > 0 ? Math.max(0, numericAccountSize - totalMargin) : 0;
@@ -456,6 +514,7 @@
                                 const liquidationPrice = calculateLiquidationPrice(crypto);
                                 const currentPrice = livePrices[crypto];
                                 const currentProfitData = calculateCurrentProfit(crypto);
+                                const cryptoTargets = priceTargets[crypto] || {};
                                 return (
                                     <PriceTargetSection
                                         key={crypto}
@@ -465,8 +524,13 @@
                                         currentPrice={currentPrice}
                                         currentProfitData={currentProfitData}
                                         lastPriceUpdate={lastPriceUpdate}
+                                        priceTargets={cryptoTargets}
+                                        addPriceTarget={(targetPrice) => addPriceTarget(crypto, targetPrice)}
+                                        removePriceTarget={(targetId) => removePriceTarget(crypto, targetId)}
                                         calculateProfit={(targetPrice) => calculateProfit(crypto, targetPrice)}
                                         formatUSD={formatUSD}
+                                        formatCurrencyInput={formatCurrencyInput}
+                                        parseCurrencyInput={parseCurrencyInput}
                                     />
                                 );
                             })}
@@ -680,18 +744,17 @@
             );
         }
 
-        function PriceTargetSection({ crypto, breakevenPrice, liquidationPrice, currentPrice, currentProfitData, lastPriceUpdate, calculateProfit, formatUSD }) {
+        function PriceTargetSection({ crypto, breakevenPrice, liquidationPrice, currentPrice, currentProfitData, lastPriceUpdate, priceTargets, addPriceTarget, removePriceTarget, calculateProfit, formatUSD, formatCurrencyInput, parseCurrencyInput }) {
             const [targetPrice, setTargetPrice] = useState('');
-            const [profitData, setProfitData] = useState(null);
 
             const handleCalculate = () => {
-                const tp = parseCurrencyInput(targetPrice);
+                const tp = parseCurrencyInput ? parseCurrencyInput(targetPrice) : parseFloat(targetPrice.replace(/,/g, ''));
                 if (isNaN(tp) || tp <= 0) {
                     alert('Please enter a valid target price greater than 0.');
                     return;
                 }
-                const data = calculateProfit(tp);
-                setProfitData(data);
+                addPriceTarget(tp);
+                setTargetPrice(''); // Clear the input after adding
             };
 
             return (
@@ -780,39 +843,53 @@
                             placeholder="0.00"
                             className="flex-grow p-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
                             value={targetPrice}
-                            onChange={(e) => setTargetPrice(formatCurrencyInput(e.target.value))}
+                            onChange={(e) => setTargetPrice(formatCurrencyInput ? formatCurrencyInput(e.target.value) : e.target.value)}
                         />
                         <button
                             onClick={handleCalculate}
                             className="bg-green-500 text-white p-2 rounded hover:bg-green-600 transition"
                         >
-                            Calculate
+                            Add Target
                         </button>
                     </div>
 
-                    {profitData && (
-                        <div className="mt-3 p-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded">
-                            <p className="font-semibold mb-2">Profits at {formatUSD(parseCurrencyInput(targetPrice))}:</p>
-                            <div className="space-y-1 text-sm">
-                                {profitData.profits.map((item, index) => (
-                                    <p key={index} className="flex justify-between">
-                                        <span>
-                                            {item.direction.charAt(0).toUpperCase() + item.direction.slice(1)} trade (Entry {formatUSD(item.entryPrice)}):
-                                        </span>
-                                        <span className={`font-medium ${item.profit >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
-                                            {formatUSD(item.profit)}
-                                        </span>
-                                    </p>
-                                ))}
-                            </div>
-                            <div className="mt-3 pt-2 border-t border-gray-200 dark:border-gray-600">
-                                <p className="flex justify-between font-semibold">
-                                    <span>Total Profit for {crypto}:</span>
-                                    <span className={`${profitData.totalProfit >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
-                                        {formatUSD(profitData.totalProfit)}
-                                    </span>
-                                </p>
-                            </div>
+                    {/* Display all price targets */}
+                    {Object.keys(priceTargets).length > 0 && (
+                        <div className="space-y-3">
+                            {Object.values(priceTargets).map((target) => (
+                                <div key={target.id} className="relative p-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded">
+                                    {/* Close button */}
+                                    <button
+                                        onClick={() => removePriceTarget(target.id)}
+                                        className="absolute top-2 right-2 w-6 h-6 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition flex items-center justify-center text-lg font-normal"
+                                        title="Remove target"
+                                    >
+                                        ×
+                                    </button>
+
+                                    <p className="font-semibold mb-2 pr-8">Profits at {formatUSD(target.targetPrice)}:</p>
+                                    <div className="space-y-1 text-sm">
+                                        {target.profitData.profits.map((item, index) => (
+                                            <p key={index} className="flex justify-between">
+                                                <span>
+                                                    {item.direction.charAt(0).toUpperCase() + item.direction.slice(1)} trade (Entry {formatUSD(item.entryPrice)}):
+                                                </span>
+                                                <span className={`font-medium ${item.profit >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                                                    {formatUSD(item.profit)}
+                                                </span>
+                                            </p>
+                                        ))}
+                                    </div>
+                                    <div className="mt-3 pt-2 border-t border-gray-200 dark:border-gray-600">
+                                        <p className="flex justify-between font-semibold">
+                                            <span>Total Profit for {crypto}:</span>
+                                            <span className={`${target.profitData.totalProfit >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                                                {formatUSD(target.profitData.totalProfit)}
+                                            </span>
+                                        </p>
+                                    </div>
+                                </div>
+                            ))}
                         </div>
                     )}
                 </div>
