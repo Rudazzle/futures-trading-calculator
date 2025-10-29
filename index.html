@@ -78,6 +78,20 @@
             });
             const cryptos = ['BTC', 'ETH'];
 
+            const calculateIndividualLiquidationPrice = (trade) => {
+                const numericAccountSize = parseCurrencyInput(accountSize);
+                const availableMargin = numericAccountSize > 0 ? numericAccountSize : trade.marginUsed;
+
+                // Calculate liquidation price where total loss equals available margin
+                if (trade.direction === 'long') {
+                    // For long position: liqPrice = entryPrice - (availableMargin / positionSize)
+                    return trade.entryPrice - (availableMargin / trade.positionSize);
+                } else {
+                    // For short position: liqPrice = entryPrice + (availableMargin / positionSize)
+                    return trade.entryPrice + (availableMargin / trade.positionSize);
+                }
+            };
+
             useEffect(() => {
                 if (theme === 'dark') {
                     document.documentElement.classList.add('dark');
@@ -89,6 +103,14 @@
 
             useEffect(() => {
                 localStorage.setItem('accountSize', accountSize);
+                // Recalculate liquidation prices when account size changes
+                if (trades.length > 0) {
+                    const updatedTrades = trades.map(trade => ({
+                        ...trade,
+                        liqPrice: calculateIndividualLiquidationPrice(trade)
+                    }));
+                    setTrades(updatedTrades);
+                }
             }, [accountSize]);
 
             useEffect(() => {
@@ -134,9 +156,8 @@
             const addTrade = (newTrade) => {
                 const notionalValue = newTrade.positionSize * newTrade.entryPrice;
                 const marginUsed = notionalValue / newTrade.leverage;
-                const liqPrice = newTrade.direction === 'long'
-                    ? newTrade.entryPrice * (1 - 1 / newTrade.leverage)
-                    : newTrade.entryPrice * (1 + 1 / newTrade.leverage);
+                const tempTrade = { ...newTrade, notionalValue, marginUsed };
+                const liqPrice = calculateIndividualLiquidationPrice(tempTrade);
 
                 setTrades([...trades, { ...newTrade, notionalValue, marginUsed, liqPrice }]);
                 setShowAddForm(false);
@@ -145,9 +166,8 @@
             const updateTrade = (index, updatedTrade) => {
                 const notionalValue = updatedTrade.positionSize * updatedTrade.entryPrice;
                 const marginUsed = notionalValue / updatedTrade.leverage;
-                const liqPrice = updatedTrade.direction === 'long'
-                    ? updatedTrade.entryPrice * (1 - 1 / updatedTrade.leverage)
-                    : updatedTrade.entryPrice * (1 + 1 / updatedTrade.leverage);
+                const tempTrade = { ...updatedTrade, notionalValue, marginUsed };
+                const liqPrice = calculateIndividualLiquidationPrice(tempTrade);
 
                 const newTrades = [...trades];
                 newTrades[index] = { ...updatedTrade, notionalValue, marginUsed, liqPrice };
