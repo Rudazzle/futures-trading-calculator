@@ -299,6 +299,30 @@
                 return calculateProfit(crypto, currentPrice);
             };
 
+            // Helper function to calculate profit percentages
+            const calculateProfitPercentages = (crypto, profitData) => {
+                if (!profitData) return null;
+
+                const cryptoTrades = trades.filter(trade => trade.crypto === crypto);
+                if (cryptoTrades.length === 0) return null;
+
+                // Calculate total margin used for this crypto
+                const totalCryptoMargin = cryptoTrades.reduce((sum, trade) => sum + trade.marginUsed, 0);
+
+                // Calculate trade profit percentage (profit vs margin used for this crypto)
+                const tradeProfitPercentage = totalCryptoMargin > 0 ? (profitData.totalProfit / totalCryptoMargin) * 100 : 0;
+
+                // Calculate account profit percentage (profit vs total account size)
+                const numericAccountSize = parseCurrencyInput(accountSize);
+                const accountProfitPercentage = numericAccountSize > 0 ? (profitData.totalProfit / numericAccountSize) * 100 : 0;
+
+                return {
+                    tradeProfitPercentage,
+                    accountProfitPercentage,
+                    totalCryptoMargin
+                };
+            };
+
             const addPriceTarget = (crypto, targetPrice) => {
                 const targetId = Date.now().toString();
                 const profitData = calculateProfit(crypto, targetPrice);
@@ -528,9 +552,11 @@
                                         addPriceTarget={(targetPrice) => addPriceTarget(crypto, targetPrice)}
                                         removePriceTarget={(targetId) => removePriceTarget(crypto, targetId)}
                                         calculateProfit={(targetPrice) => calculateProfit(crypto, targetPrice)}
+                                        calculateProfitPercentages={(crypto, profitData) => calculateProfitPercentages(crypto, profitData)}
                                         formatUSD={formatUSD}
                                         formatCurrencyInput={formatCurrencyInput}
                                         parseCurrencyInput={parseCurrencyInput}
+                                        accountSize={accountSize}
                                     />
                                 );
                             })}
@@ -744,7 +770,7 @@
             );
         }
 
-        function PriceTargetSection({ crypto, breakevenPrice, liquidationPrice, currentPrice, currentProfitData, lastPriceUpdate, priceTargets, addPriceTarget, removePriceTarget, calculateProfit, formatUSD, formatCurrencyInput, parseCurrencyInput }) {
+        function PriceTargetSection({ crypto, breakevenPrice, liquidationPrice, currentPrice, currentProfitData, lastPriceUpdate, priceTargets, addPriceTarget, removePriceTarget, calculateProfit, calculateProfitPercentages, formatUSD, formatCurrencyInput, parseCurrencyInput, accountSize }) {
             const [targetPrice, setTargetPrice] = useState('');
 
             const handleCalculate = () => {
@@ -776,7 +802,7 @@
                             }`}>
                                 <span className="font-semibold">Current Price:</span> {currentPrice ? formatUSD(currentPrice) : 'Loading...'}
                             </p>
-                            <p className={`text-sm font-medium ${
+                            <p className={`text-sm font-medium mb-1 ${
                                 currentProfitData && currentProfitData.totalProfit >= 0
                                     ? 'text-green-800 dark:text-green-200'
                                     : 'text-red-800 dark:text-red-200'
@@ -785,6 +811,29 @@
                                     {currentProfitData && currentProfitData.totalProfit >= 0 ? 'Estimated Profit:' : 'Estimated Loss:'}
                                 </span> {currentProfitData ? formatUSD(Math.abs(currentProfitData.totalProfit)) : 'Calculating...'}
                             </p>
+                            {(() => {
+                                const percentages = calculateProfitPercentages(crypto, currentProfitData);
+                                return percentages && currentProfitData ? (
+                                    <div className="flex flex-wrap gap-2 mt-2">
+                                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                                            currentProfitData.totalProfit >= 0
+                                                ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
+                                                : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+                                        }`}>
+                                            Trade P/L: {percentages.tradeProfitPercentage >= 0 ? '+' : ''}{percentages.tradeProfitPercentage.toFixed(2)}%
+                                        </span>
+                                        {parseCurrencyInput(accountSize) > 0 && (
+                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                                                currentProfitData.totalProfit >= 0
+                                                    ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
+                                                    : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+                                            }`}>
+                                                Account P/L: {percentages.accountProfitPercentage >= 0 ? '+' : ''}{percentages.accountProfitPercentage.toFixed(2)}%
+                                            </span>
+                                        )}
+                                    </div>
+                                ) : null;
+                            })()}
                             <p className={`text-xs mt-2 ${
                                 currentProfitData && currentProfitData.totalProfit >= 0
                                     ? 'text-green-600 dark:text-green-300'
@@ -887,6 +936,29 @@
                                                 {formatUSD(target.profitData.totalProfit)}
                                             </span>
                                         </p>
+                                        {(() => {
+                                            const percentages = calculateProfitPercentages(crypto, target.profitData);
+                                            return percentages ? (
+                                                <div className="flex flex-wrap gap-2 mt-2">
+                                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                                                        target.profitData.totalProfit >= 0
+                                                            ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
+                                                            : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+                                                    }`}>
+                                                        Trade P/L: {percentages.tradeProfitPercentage >= 0 ? '+' : ''}{percentages.tradeProfitPercentage.toFixed(2)}%
+                                                    </span>
+                                                    {parseCurrencyInput(accountSize) > 0 && (
+                                                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                                                            target.profitData.totalProfit >= 0
+                                                                ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
+                                                                : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+                                                        }`}>
+                                                            Account P/L: {percentages.accountProfitPercentage >= 0 ? '+' : ''}{percentages.accountProfitPercentage.toFixed(2)}%
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            ) : null;
+                                        })()}
                                     </div>
                                 </div>
                             ))}
