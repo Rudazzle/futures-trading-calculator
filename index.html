@@ -76,6 +76,22 @@
                 const savedTargets = localStorage.getItem('priceTargets');
                 return savedTargets ? JSON.parse(savedTargets) : {};
             });
+            const [portfolioTargets, setPortfolioTargets] = useState(() => {
+                const savedPortfolioTargets = localStorage.getItem('portfolioTargets');
+                return savedPortfolioTargets ? JSON.parse(savedPortfolioTargets) : [1, 2, 3]; // Default to 1%, 2%, 3%
+            });
+            const [openTradesExpanded, setOpenTradesExpanded] = useState(() => {
+                const savedState = localStorage.getItem('openTradesExpanded');
+                return savedState !== null ? JSON.parse(savedState) : true; // Default to expanded
+            });
+            const [portfolioTargetsExpanded, setPortfolioTargetsExpanded] = useState(() => {
+                const savedState = localStorage.getItem('portfolioTargetsExpanded');
+                return savedState !== null ? JSON.parse(savedState) : {}; // Default to empty object (all expanded)
+            });
+            const [priceTargetsExpanded, setPriceTargetsExpanded] = useState(() => {
+                const savedState = localStorage.getItem('priceTargetsExpanded');
+                return savedState !== null ? JSON.parse(savedState) : {}; // Default to empty object (all expanded)
+            });
             const cryptos = ['BTC', 'ETH'];
 
             const calculateIndividualLiquidationPrice = (trade) => {
@@ -122,6 +138,22 @@
             useEffect(() => {
                 localStorage.setItem('priceTargets', JSON.stringify(priceTargets));
             }, [priceTargets]);
+
+            useEffect(() => {
+                localStorage.setItem('portfolioTargets', JSON.stringify(portfolioTargets));
+            }, [portfolioTargets]);
+
+            useEffect(() => {
+                localStorage.setItem('openTradesExpanded', JSON.stringify(openTradesExpanded));
+            }, [openTradesExpanded]);
+
+            useEffect(() => {
+                localStorage.setItem('portfolioTargetsExpanded', JSON.stringify(portfolioTargetsExpanded));
+            }, [portfolioTargetsExpanded]);
+
+            useEffect(() => {
+                localStorage.setItem('priceTargetsExpanded', JSON.stringify(priceTargetsExpanded));
+            }, [priceTargetsExpanded]);
 
             // Fetch live prices from CoinGecko API
             const fetchLivePrices = async () => {
@@ -391,6 +423,82 @@
                 });
             };
 
+            // Calculate the price needed for a crypto to achieve a specific portfolio gain percentage
+            const calculatePortfolioTargetPrice = (crypto, portfolioGainPercent) => {
+                const numericAccountSize = parseCurrencyInput(accountSize);
+                if (numericAccountSize <= 0) return null;
+
+                const targetProfit = (portfolioGainPercent / 100) * numericAccountSize;
+                const cryptoTrades = trades.filter(trade => trade.crypto === crypto);
+                if (cryptoTrades.length === 0) return null;
+
+                let totalLongSize = 0;
+                let totalShortSize = 0;
+                let totalLongValue = 0;
+                let totalShortValue = 0;
+
+                cryptoTrades.forEach(trade => {
+                    if (trade.direction === 'long') {
+                        totalLongSize += trade.positionSize;
+                        totalLongValue += trade.positionSize * trade.entryPrice;
+                    } else {
+                        totalShortSize += trade.positionSize;
+                        totalShortValue += trade.positionSize * trade.entryPrice;
+                    }
+                });
+
+                const netSize = totalLongSize - totalShortSize;
+                const netValue = totalLongValue - totalShortValue;
+
+                if (Math.abs(netSize) < 0.0001) {
+                    // Positions are perfectly hedged - no price can achieve portfolio gain
+                    return null;
+                }
+
+                // Calculate required price to achieve target profit
+                // For net long: profit = netSize * (targetPrice - avgEntryPrice)
+                // For net short: profit = netSize * (avgEntryPrice - targetPrice)
+                // Solving for targetPrice: targetPrice = avgEntryPrice + (profit / netSize) for long
+                //                         targetPrice = avgEntryPrice - (profit / netSize) for short
+                const avgEntryPrice = netValue / netSize;
+
+                if (netSize > 0) {
+                    // Net long position
+                    return avgEntryPrice + (targetProfit / netSize);
+                } else {
+                    // Net short position
+                    return avgEntryPrice - (targetProfit / netSize);
+                }
+            };
+
+            // Add a new portfolio target percentage
+            const addPortfolioTarget = (percentage) => {
+                if (!portfolioTargets.includes(percentage)) {
+                    setPortfolioTargets([...portfolioTargets, percentage].sort((a, b) => a - b));
+                }
+            };
+
+            // Remove a portfolio target percentage
+            const removePortfolioTarget = (percentage) => {
+                setPortfolioTargets(portfolioTargets.filter(p => p !== percentage));
+            };
+
+            // Toggle portfolio targets section expansion for a specific crypto
+            const togglePortfolioTargetsExpansion = (crypto) => {
+                setPortfolioTargetsExpanded(prev => ({
+                    ...prev,
+                    [crypto]: !prev[crypto] // Default to true (expanded) if not set
+                }));
+            };
+
+            // Toggle price targets section expansion for a specific crypto
+            const togglePriceTargetsExpansion = (crypto) => {
+                setPriceTargetsExpanded(prev => ({
+                    ...prev,
+                    [crypto]: !prev[crypto] // Default to true (expanded) if not set
+                }));
+            };
+
             const totalMargin = trades.reduce((sum, trade) => sum + trade.marginUsed, 0);
             const numericAccountSize = parseCurrencyInput(accountSize);
             const totalMarginRemaining = numericAccountSize > 0 ? Math.max(0, numericAccountSize - totalMargin) : 0;
@@ -410,32 +518,43 @@
 
                     {/* Account Size */}
                     <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow mb-6">
-                        <label htmlFor="account-size" className="block text-lg font-semibold mb-2">Account Size (USD)</label>
-                        <input
-                            id="account-size"
-                            type="text"
-                            placeholder="0.00"
-                            className="w-full p-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
-                            value={accountSize}
-                            onChange={(e) => setAccountSize(formatCurrencyInput(e.target.value))}
-                        />
+                        <div className="flex items-center space-x-4">
+                            <label htmlFor="account-size" className="text-lg font-semibold whitespace-nowrap">Account Size (USD)</label>
+                            <input
+                                id="account-size"
+                                type="text"
+                                placeholder="0.00"
+                                className="flex-1 p-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
+                                value={accountSize}
+                                onChange={(e) => setAccountSize(formatCurrencyInput(e.target.value))}
+                            />
+                        </div>
                     </div>
 
-                    {/* Open Trades - Always visible */}
+                    {/* Open Trades - Collapsible */}
                     <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow mb-6">
                         <div className="flex justify-between items-center mb-4">
-                            <h2 className="text-xl font-semibold">Open Trades</h2>
+                            <div className="flex items-center space-x-3">
+                                <h2 className="text-xl font-semibold">Open Trades ({trades.length})</h2>
+                                <button
+                                    onClick={() => setShowAddForm(!showAddForm)}
+                                    className="bg-blue-500 text-white px-2 py-1 text-xs rounded hover:bg-blue-600 transition"
+                                >
+                                    {showAddForm ? 'Cancel' : 'Add Trade'}
+                                </button>
+                            </div>
                             <button
-                                onClick={() => setShowAddForm(!showAddForm)}
-                                className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 transition"
+                                onClick={() => setOpenTradesExpanded(!openTradesExpanded)}
+                                className="w-8 h-8 border border-gray-300 dark:border-gray-600 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 hover:text-gray-800 dark:hover:text-gray-100 transition rounded flex items-center justify-center text-lg font-medium"
+                                title={openTradesExpanded ? 'Minimize section' : 'Maximize section'}
                             >
-                                {showAddForm ? 'Cancel' : 'Add Trade'}
+                                {openTradesExpanded ? '−' : '+'}
                             </button>
                         </div>
 
-                        {/* Add Trade Form - Conditionally shown */}
+                        {/* Add Trade Form - Always visible when shown */}
                         {showAddForm && (
-                            <div className="mb-6 p-4 border rounded dark:border-gray-600 bg-gray-50 dark:bg-gray-700">
+                            <div className="mb-4 p-4 border rounded dark:border-gray-600 bg-gray-50 dark:bg-gray-700">
                                 <AddTradeForm
                                     addTrade={addTrade}
                                     formatCurrencyInput={formatCurrencyInput}
@@ -444,26 +563,29 @@
                             </div>
                         )}
 
-                        {/* Edit Trade Form - Conditionally shown */}
-                        {editingTradeIndex !== null && (
-                            <div className="mb-6 p-4 border rounded dark:border-gray-600 bg-gray-50 dark:bg-gray-700">
-                                <EditTradeForm
-                                    trade={trades[editingTradeIndex]}
-                                    updateTrade={(updatedTrade) => updateTrade(editingTradeIndex, updatedTrade)}
-                                    onCancel={() => setEditingTradeIndex(null)}
-                                    formatCurrencyInput={formatCurrencyInput}
-                                    parseCurrencyInput={parseCurrencyInput}
-                                />
-                            </div>
-                        )}
+                        {/* Collapsible content */}
+                        {openTradesExpanded && (
+                            <>
+                                {/* Edit Trade Form - Conditionally shown */}
+                                {editingTradeIndex !== null && (
+                                    <div className="mb-6 p-4 border rounded dark:border-gray-600 bg-gray-50 dark:bg-gray-700">
+                                        <EditTradeForm
+                                            trade={trades[editingTradeIndex]}
+                                            updateTrade={(updatedTrade) => updateTrade(editingTradeIndex, updatedTrade)}
+                                            onCancel={() => setEditingTradeIndex(null)}
+                                            formatCurrencyInput={formatCurrencyInput}
+                                            parseCurrencyInput={parseCurrencyInput}
+                                        />
+                                    </div>
+                                )}
 
-                        {trades.length === 0 ? (
-                            <p className="text-gray-500 dark:text-gray-400 text-center py-8">
-                                No open trades. Click "Add Trade" to get started.
-                            </p>
-                        ) : (
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                                {trades.map((trade, index) => (
+                                {trades.length === 0 ? (
+                                    <p className="text-gray-500 dark:text-gray-400 text-center py-8">
+                                        No open trades. Click "Add Trade" to get started.
+                                    </p>
+                                ) : (
+                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                                        {trades.map((trade, index) => (
                                     <div key={index} className="border p-4 rounded-lg border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-sm hover:shadow-md dark:hover:shadow-lg transition-shadow">
                                         <div className="flex justify-between items-start mb-3">
                                             <div className="flex items-center space-x-2">
@@ -524,10 +646,13 @@
                                             </button>
                                         </div>
                                     </div>
-                                ))}
-                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </>
                         )}
 
+                        {/* Footer - Always visible when there are trades */}
                         {trades.length > 0 && (
                             <>
                                 <div className="mt-4 flex justify-between items-center">
@@ -546,6 +671,36 @@
                             </>
                         )}
                     </div>
+
+                    {/* Portfolio Targets */}
+                    {trades.length > 0 && (
+                        <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow mb-6">
+                            <h2 className="text-xl font-semibold mb-4">Portfolio Targets</h2>
+                            {cryptos.map(crypto => {
+                                const cryptoTrades = trades.filter(trade => trade.crypto === crypto);
+                                if (cryptoTrades.length === 0) return null;
+                                const currentProfitData = calculateCurrentProfit(crypto);
+                                return (
+                                    <PortfolioTargetsSection
+                                        key={crypto}
+                                        crypto={crypto}
+                                        portfolioTargets={portfolioTargets}
+                                        addPortfolioTarget={addPortfolioTarget}
+                                        removePortfolioTarget={removePortfolioTarget}
+                                        calculatePortfolioTargetPrice={(crypto, percentage) => calculatePortfolioTargetPrice(crypto, percentage)}
+                                        formatUSD={formatUSD}
+                                        formatCurrencyInput={formatCurrencyInput}
+                                        parseCurrencyInput={parseCurrencyInput}
+                                        accountSize={accountSize}
+                                        currentPrice={livePrices[crypto]}
+                                        currentProfitData={currentProfitData}
+                                        isExpanded={portfolioTargetsExpanded[crypto] !== false} // Default to true (expanded)
+                                        toggleExpansion={() => togglePortfolioTargetsExpansion(crypto)}
+                                    />
+                                );
+                            })}
+                        </div>
+                    )}
 
                     {/* Price Targets */}
                     {trades.length > 0 && (
@@ -577,6 +732,8 @@
                                         formatCurrencyInput={formatCurrencyInput}
                                         parseCurrencyInput={parseCurrencyInput}
                                         accountSize={accountSize}
+                                        isExpanded={priceTargetsExpanded[crypto] !== false} // Default to true (expanded)
+                                        toggleExpansion={() => togglePriceTargetsExpansion(crypto)}
                                     />
                                 );
                             })}
@@ -790,7 +947,7 @@
             );
         }
 
-        function PriceTargetSection({ crypto, breakevenPrice, liquidationPrice, currentPrice, currentProfitData, lastPriceUpdate, priceTargets, addPriceTarget, removePriceTarget, calculateProfit, calculateProfitPercentages, formatUSD, formatCurrencyInput, parseCurrencyInput, accountSize }) {
+        function PriceTargetSection({ crypto, breakevenPrice, liquidationPrice, currentPrice, currentProfitData, lastPriceUpdate, priceTargets, addPriceTarget, removePriceTarget, calculateProfit, calculateProfitPercentages, formatUSD, formatCurrencyInput, parseCurrencyInput, accountSize, isExpanded, toggleExpansion }) {
             const [targetPrice, setTargetPrice] = useState('');
 
             const handleCalculate = () => {
@@ -805,12 +962,21 @@
 
             return (
                 <div className="mb-6 p-4 border rounded-lg border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700">
-                    <h3 className="text-lg font-semibold mb-3">{crypto} Price Targets</h3>
+                    <div className="flex justify-between items-center mb-3">
+                        <h3 className="text-lg font-semibold">{crypto} Price Targets</h3>
+                        <button
+                            onClick={toggleExpansion}
+                            className="w-8 h-8 border border-gray-300 dark:border-gray-600 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 hover:text-gray-800 dark:hover:text-gray-100 transition rounded flex items-center justify-center text-lg font-medium"
+                            title={isExpanded ? 'Minimize section' : 'Maximize section'}
+                        >
+                            {isExpanded ? '−' : '+'}
+                        </button>
+                    </div>
 
                     {/* Current Price, Breakeven and Liquidation Price Display */}
-                    <div className="mb-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                        {/* Combined Current Price and Profit/Loss */}
-                        <div className={`p-3 border rounded ${
+                    <div className="mb-4 grid grid-cols-1 lg:grid-cols-5 gap-4">
+                        {/* Combined Current Price and Profit/Loss - Takes 3 out of 5 columns (60% instead of 66.7%) */}
+                        <div className={`lg:col-span-3 p-3 border rounded ${
                             currentProfitData && currentProfitData.totalProfit >= 0
                                 ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'
                                 : 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'
@@ -863,126 +1029,380 @@
                             </p>
                         </div>
 
-                        {/* Breakeven Price */}
-                        {breakevenPrice !== null ? (
-                            <div className="p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded">
-                                <p className="text-sm font-medium text-blue-800 dark:text-blue-200">
-                                    <span className="font-semibold">Breakeven Price:</span> {formatUSD(breakevenPrice)}
-                                </p>
-                                <p className="text-xs text-blue-600 dark:text-blue-300 mt-1">
-                                    Price where all {crypto} positions break even
-                                </p>
-                            </div>
-                        ) : (
-                            <div className="p-3 bg-gray-100 dark:bg-gray-600 border border-gray-300 dark:border-gray-500 rounded">
-                                <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                                    <span className="font-semibold">Breakeven Price:</span> N/A
-                                </p>
-                                <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
-                                    Positions are perfectly hedged
-                                </p>
-                            </div>
-                        )}
+                        {/* Breakeven and Liquidation Prices - Stacked vertically in right column, spans 2 columns */}
+                        <div className="lg:col-span-2 space-y-4">
+                            {/* Breakeven Price */}
+                            {breakevenPrice !== null ? (
+                                <div className="p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded">
+                                    <p className="text-sm font-medium text-blue-800 dark:text-blue-200">
+                                        <span className="font-semibold">Breakeven Price:</span> {formatUSD(breakevenPrice)}
+                                    </p>
+                                    <p className="text-xs text-blue-600 dark:text-blue-300 mt-1">
+                                        Price where all {crypto} positions break even
+                                    </p>
+                                </div>
+                            ) : (
+                                <div className="p-3 bg-gray-100 dark:bg-gray-600 border border-gray-300 dark:border-gray-500 rounded">
+                                    <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                                        <span className="font-semibold">Breakeven Price:</span> N/A
+                                    </p>
+                                    <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+                                        Positions are perfectly hedged
+                                    </p>
+                                </div>
+                            )}
 
-                        {/* Liquidation Price */}
-                        {liquidationPrice !== null ? (
-                            <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded">
-                                <p className="text-sm font-medium text-red-800 dark:text-red-200">
-                                    <span className="font-semibold">Liquidation Price:</span> {formatUSD(liquidationPrice)}
-                                </p>
-                                <p className="text-xs text-red-600 dark:text-red-300 mt-1">
-                                    Price where entire {crypto} position gets liquidated
-                                </p>
-                            </div>
-                        ) : (
-                            <div className="p-3 bg-gray-100 dark:bg-gray-600 border border-gray-300 dark:border-gray-500 rounded">
-                                <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                                    <span className="font-semibold">Liquidation Price:</span> N/A
-                                </p>
-                                <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
-                                    Positions are perfectly hedged
-                                </p>
-                            </div>
-                        )}
+                            {/* Liquidation Price */}
+                            {liquidationPrice !== null ? (
+                                <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded">
+                                    <p className="text-sm font-medium text-red-800 dark:text-red-200">
+                                        <span className="font-semibold">Liquidation Price:</span> {formatUSD(liquidationPrice)}
+                                    </p>
+                                    <p className="text-xs text-red-600 dark:text-red-300 mt-1">
+                                        Price where entire {crypto} position gets liquidated
+                                    </p>
+                                </div>
+                            ) : (
+                                <div className="p-3 bg-gray-100 dark:bg-gray-600 border border-gray-300 dark:border-gray-500 rounded">
+                                    <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                                        <span className="font-semibold">Liquidation Price:</span> N/A
+                                    </p>
+                                    <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+                                        Positions are perfectly hedged
+                                    </p>
+                                </div>
+                            )}
+                        </div>
                     </div>
 
-                    <div className="flex flex-col md:flex-row space-y-2 md:space-y-0 md:space-x-2 mb-3">
-                        <input
-                            type="text"
-                            placeholder="0.00"
-                            className="flex-grow p-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
-                            value={targetPrice}
-                            onChange={(e) => setTargetPrice(formatCurrencyInput ? formatCurrencyInput(e.target.value) : e.target.value)}
-                        />
-                        <button
-                            onClick={handleCalculate}
-                            className="bg-green-500 text-white p-2 rounded hover:bg-green-600 transition"
-                        >
-                            Add Target
-                        </button>
-                    </div>
+                    {/* Add Target input - only show when expanded */}
+                    {isExpanded && (
+                        <div className="flex flex-col md:flex-row space-y-2 md:space-y-0 md:space-x-2 mb-3">
+                            <input
+                                type="text"
+                                placeholder="0.00"
+                                className="flex-grow p-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
+                                value={targetPrice}
+                                onChange={(e) => setTargetPrice(formatCurrencyInput ? formatCurrencyInput(e.target.value) : e.target.value)}
+                            />
+                            <button
+                                onClick={handleCalculate}
+                                className="bg-green-500 text-white p-2 rounded hover:bg-green-600 transition"
+                            >
+                                Add Target
+                            </button>
+                        </div>
+                    )}
 
                     {/* Display all price targets */}
                     {Object.keys(priceTargets).length > 0 && (
-                        <div className="space-y-3">
-                            {Object.values(priceTargets).map((target) => (
-                                <div key={target.id} className="relative p-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded">
-                                    {/* Close button */}
-                                    <button
-                                        onClick={() => removePriceTarget(target.id)}
-                                        className="absolute top-2 right-2 w-6 h-6 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition flex items-center justify-center text-lg font-normal"
-                                        title="Remove target"
-                                    >
-                                        ×
-                                    </button>
+                        <>
+                            {/* Expanded view - full details */}
+                            {isExpanded && (
+                                <div className="space-y-3">
+                                    {Object.values(priceTargets).map((target) => (
+                                        <div key={target.id} className="relative p-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded">
+                                            {/* Close button */}
+                                            <button
+                                                onClick={() => removePriceTarget(target.id)}
+                                                className="absolute top-2 right-2 w-6 h-6 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition flex items-center justify-center text-lg font-normal"
+                                                title="Remove target"
+                                            >
+                                                ×
+                                            </button>
 
-                                    <p className="font-semibold mb-2 pr-8">Profits at {formatUSD(target.targetPrice)}:</p>
-                                    <div className="space-y-1 text-sm">
-                                        {target.profitData.profits.map((item, index) => (
-                                            <p key={index} className="flex justify-between">
-                                                <span>
-                                                    {item.direction.charAt(0).toUpperCase() + item.direction.slice(1)} trade (Entry {formatUSD(item.entryPrice)}):
-                                                </span>
-                                                <span className={`font-medium ${item.profit >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
-                                                    {formatUSD(item.profit)}
-                                                </span>
-                                            </p>
-                                        ))}
-                                    </div>
-                                    <div className="mt-3 pt-2 border-t border-gray-200 dark:border-gray-600">
-                                        <p className="flex justify-between font-semibold">
-                                            <span>Total Profit for {crypto}:</span>
-                                            <span className={`${target.profitData.totalProfit >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
-                                                {formatUSD(target.profitData.totalProfit)}
-                                            </span>
-                                        </p>
-                                        {(() => {
-                                            const percentages = calculateProfitPercentages(crypto, target.profitData);
-                                            return percentages ? (
-                                                <div className="flex flex-wrap gap-2 mt-2">
-                                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                                            <p className="font-semibold mb-2 pr-8">Profits at {formatUSD(target.targetPrice)}:</p>
+                                            <div className="space-y-1 text-sm">
+                                                {target.profitData.profits.map((item, index) => (
+                                                    <p key={index} className="flex justify-between">
+                                                        <span>
+                                                            {item.direction.charAt(0).toUpperCase() + item.direction.slice(1)} trade (Entry {formatUSD(item.entryPrice)}):
+                                                        </span>
+                                                        <span className={`font-medium ${item.profit >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                                                            {formatUSD(item.profit)}
+                                                        </span>
+                                                    </p>
+                                                ))}
+                                            </div>
+                                            <div className="mt-3 pt-2 border-t border-gray-200 dark:border-gray-600">
+                                                <p className="flex justify-between font-semibold">
+                                                    <span>Total Profit for {crypto}:</span>
+                                                    <span className={`${target.profitData.totalProfit >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                                                        {formatUSD(target.profitData.totalProfit)}
+                                                    </span>
+                                                </p>
+                                                {(() => {
+                                                    const percentages = calculateProfitPercentages(crypto, target.profitData);
+                                                    return percentages ? (
+                                                        <div className="flex flex-wrap gap-2 mt-2">
+                                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                                                                target.profitData.totalProfit >= 0
+                                                                    ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
+                                                                    : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+                                                            }`}>
+                                                                Trade P/L: {percentages.tradeProfitPercentage >= 0 ? '+' : ''}{percentages.tradeProfitPercentage.toFixed(2)}%
+                                                            </span>
+                                                            {parseCurrencyInput(accountSize) > 0 && (
+                                                                <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                                                                    target.profitData.totalProfit >= 0
+                                                                        ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
+                                                                        : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+                                                                }`}>
+                                                                    Account P/L: {percentages.accountProfitPercentage >= 0 ? '+' : ''}{percentages.accountProfitPercentage.toFixed(2)}%
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                    ) : null;
+                                                })()}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
+                            {/* Minimized view - compact display */}
+                            {!isExpanded && (
+                                <div className="space-y-2">
+                                    {Object.values(priceTargets).map((target) => {
+                                        const percentages = calculateProfitPercentages(crypto, target.profitData);
+                                        return (
+                                            <div key={target.id} className="flex items-center justify-between p-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded">
+                                                <div className="flex items-center space-x-3">
+                                                    <span className="font-medium text-sm">
+                                                        {formatUSD(target.targetPrice)} Target
+                                                    </span>
+                                                    <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
                                                         target.profitData.totalProfit >= 0
                                                             ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
                                                             : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
                                                     }`}>
-                                                        Trade P/L: {percentages.tradeProfitPercentage >= 0 ? '+' : ''}{percentages.tradeProfitPercentage.toFixed(2)}%
+                                                        Total {formatUSD(target.profitData.totalProfit)}
                                                     </span>
-                                                    {parseCurrencyInput(accountSize) > 0 && (
-                                                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                                                            target.profitData.totalProfit >= 0
-                                                                ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
-                                                                : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
-                                                        }`}>
-                                                            Account P/L: {percentages.accountProfitPercentage >= 0 ? '+' : ''}{percentages.accountProfitPercentage.toFixed(2)}%
-                                                        </span>
+                                                    {percentages && (
+                                                        <>
+                                                            <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                                                                target.profitData.totalProfit >= 0
+                                                                    ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
+                                                                    : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+                                                            }`}>
+                                                                Trade P/L: {percentages.tradeProfitPercentage >= 0 ? '+' : ''}{percentages.tradeProfitPercentage.toFixed(2)}%
+                                                            </span>
+                                                            {parseCurrencyInput(accountSize) > 0 && (
+                                                                <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                                                                    target.profitData.totalProfit >= 0
+                                                                        ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
+                                                                        : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+                                                                }`}>
+                                                                    Account P/L: {percentages.accountProfitPercentage >= 0 ? '+' : ''}{percentages.accountProfitPercentage.toFixed(2)}%
+                                                                </span>
+                                                            )}
+                                                        </>
                                                     )}
                                                 </div>
-                                            ) : null;
-                                        })()}
-                                    </div>
+                                                <button
+                                                    onClick={() => removePriceTarget(target.id)}
+                                                    className="w-6 h-6 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition flex items-center justify-center text-lg font-normal"
+                                                    title="Remove target"
+                                                >
+                                                    ×
+                                                </button>
+                                            </div>
+                                        );
+                                    })}
                                 </div>
-                            ))}
+                            )}
+                        </>
+                    )}
+                </div>
+            );
+        }
+
+        function PortfolioTargetsSection({
+            crypto,
+            portfolioTargets,
+            addPortfolioTarget,
+            removePortfolioTarget,
+            calculatePortfolioTargetPrice,
+            formatUSD,
+            formatCurrencyInput,
+            parseCurrencyInput,
+            accountSize,
+            currentPrice,
+            currentProfitData,
+            isExpanded,
+            toggleExpansion
+        }) {
+            const [newTargetPercent, setNewTargetPercent] = useState('');
+
+            const handleAddTarget = () => {
+                const percent = parseFloat(newTargetPercent);
+                if (isNaN(percent) || percent <= 0) {
+                    alert('Please enter a valid percentage greater than 0.');
+                    return;
+                }
+                addPortfolioTarget(percent);
+                setNewTargetPercent('');
+            };
+
+            const numericAccountSize = parseCurrencyInput(accountSize);
+            const showSection = numericAccountSize > 0;
+
+            if (!showSection) {
+                return (
+                    <div className="mb-6 p-4 border rounded-lg border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700">
+                        <div className="flex justify-between items-center">
+                            <div className="flex items-center space-x-3">
+                                <h3 className="text-lg font-semibold">{crypto} Portfolio Targets</h3>
+                                {currentPrice && currentProfitData && (
+                                    <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                                        currentProfitData.totalProfit >= 0
+                                            ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
+                                            : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+                                    }`}>
+                                        Current: {((currentProfitData.totalProfit / parseCurrencyInput(accountSize)) * 100).toFixed(2)}% • {formatUSD(currentPrice)}
+                                    </span>
+                                )}
+                            </div>
+                            <button
+                                onClick={toggleExpansion}
+                                className="w-8 h-8 border border-gray-300 dark:border-gray-600 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 hover:text-gray-800 dark:hover:text-gray-100 transition rounded flex items-center justify-center text-lg font-medium"
+                                title={isExpanded ? 'Minimize section' : 'Maximize section'}
+                            >
+                                {isExpanded ? '−' : '+'}
+                            </button>
                         </div>
+                        <p className="text-gray-600 dark:text-gray-400 text-sm mt-3">
+                            Please set an account size to view portfolio targets.
+                        </p>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="mb-6 p-4 border rounded-lg border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700">
+                    <div className="flex justify-between items-center mb-3">
+                        <div className="flex items-center space-x-3">
+                            <h3 className="text-lg font-semibold">{crypto} Portfolio Targets</h3>
+                            {currentPrice && currentProfitData && (
+                                <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                                    currentProfitData.totalProfit >= 0
+                                        ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
+                                        : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+                                }`}>
+                                    Current: {((currentProfitData.totalProfit / parseCurrencyInput(accountSize)) * 100).toFixed(2)}% • {formatUSD(currentPrice)}
+                                </span>
+                            )}
+                        </div>
+                        <button
+                            onClick={toggleExpansion}
+                            className="w-8 h-8 border border-gray-300 dark:border-gray-600 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 hover:text-gray-800 dark:hover:text-gray-100 transition rounded flex items-center justify-center text-lg font-medium"
+                            title={isExpanded ? 'Minimize section' : 'Maximize section'}
+                        >
+                            {isExpanded ? '−' : '+'}
+                        </button>
+                    </div>
+
+                    {/* Compact view when collapsed - horizontal badges */}
+                    {!isExpanded && portfolioTargets.length > 0 && (
+                        <div className="flex flex-wrap gap-2">
+                            {portfolioTargets.map((percentage) => {
+                                const targetPrice = calculatePortfolioTargetPrice(crypto, percentage);
+                                return (
+                                    <div key={percentage} className="inline-flex items-center px-3 py-1.5 bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-200 rounded-full text-sm font-medium">
+                                        <span className="font-semibold">{percentage}%</span>
+                                        <span className="mx-2">•</span>
+                                        <span className="text-xs">
+                                            {targetPrice !== null ? formatUSD(targetPrice) : 'N/A'}
+                                        </span>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+
+                    {/* Expanded view */}
+                    {isExpanded && (
+                        <>
+                            <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                                Prices needed to achieve specific portfolio gain percentages (Account Size: {formatUSD(numericAccountSize)})
+                            </p>
+
+                            {/* Add new target input */}
+                            <div className="flex flex-col md:flex-row space-y-2 md:space-y-0 md:space-x-2 mb-4">
+                                <input
+                                    type="number"
+                                    step="0.1"
+                                    min="0"
+                                    placeholder="Enter percentage (e.g., 5 for 5%)"
+                                    className="flex-grow p-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
+                                    value={newTargetPercent}
+                                    onChange={(e) => setNewTargetPercent(e.target.value)}
+                                />
+                                <button
+                                    onClick={handleAddTarget}
+                                    className="bg-blue-500 text-white p-2 rounded hover:bg-blue-600 transition"
+                                >
+                                    Add Target %
+                                </button>
+                            </div>
+                        </>
+                    )}
+
+                    {/* Display portfolio targets - only when expanded */}
+                    {isExpanded && (
+                        <>
+                            {portfolioTargets.length > 0 ? (
+                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                                    {portfolioTargets.map((percentage) => {
+                                        const targetPrice = calculatePortfolioTargetPrice(crypto, percentage);
+                                        const targetProfitAmount = (percentage / 100) * numericAccountSize;
+
+                                        // Always show close button for all targets
+                                        const showCloseButton = true;
+
+                                        return (
+                                            <div key={percentage} className="relative p-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded">
+                                                {/* Close button - fixed logic */}
+                                                {showCloseButton && (
+                                                    <button
+                                                        onClick={() => removePortfolioTarget(percentage)}
+                                                        className="absolute top-2 right-2 w-6 h-6 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition flex items-center justify-center text-lg font-normal"
+                                                        title="Remove target"
+                                                    >
+                                                        ×
+                                                    </button>
+                                                )}
+
+                                                <div className={showCloseButton ? "pr-8" : ""}>
+                                                    <p className="font-semibold text-sm mb-2">
+                                                        {percentage}% Portfolio Gain
+                                                    </p>
+                                                    <p className="text-xs text-gray-600 dark:text-gray-400 mb-2">
+                                                        Target Profit: {formatUSD(targetProfitAmount)}
+                                                    </p>
+                                                    {targetPrice !== null ? (
+                                                        <p className="text-sm">
+                                                            <span className="font-medium">Target Price:</span>
+                                                            <span className="ml-2 font-semibold text-blue-600 dark:text-blue-400">
+                                                                {formatUSD(targetPrice)}
+                                                            </span>
+                                                        </p>
+                                                    ) : (
+                                                        <p className="text-sm text-gray-500 dark:text-gray-400">
+                                                            N/A (Hedged positions)
+                                                        </p>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            ) : (
+                                <p className="text-gray-500 dark:text-gray-400 text-center py-4">
+                                    No portfolio targets set. Add a percentage target above.
+                                </p>
+                            )}
+                        </>
                     )}
                 </div>
             );
