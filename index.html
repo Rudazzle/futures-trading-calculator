@@ -61,46 +61,108 @@
     <script type="text/babel">
         const { useState, useEffect } = React;
 
+        // Account management utility functions
+        const generateAccountId = () => {
+            return 'account_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        };
+
+        const createDefaultAccount = (name = 'Main Account') => {
+            return {
+                id: generateAccountId(),
+                name: name,
+                accountSize: '',
+                trades: [],
+                priceTargets: {},
+                portfolioTargets: [1, 2, 3],
+                openTradesExpanded: true,
+                portfolioTargetsExpanded: {},
+                priceTargetsExpanded: {}
+            };
+        };
+
+        const migrateExistingData = () => {
+            // Check if we already have the new account structure
+            const existingAccounts = localStorage.getItem('accounts');
+            if (existingAccounts) {
+                return JSON.parse(existingAccounts);
+            }
+
+            // Migrate existing data to new structure
+            const legacyAccountSize = localStorage.getItem('accountSize') || '';
+            const legacyTrades = localStorage.getItem('trades');
+            const legacyPriceTargets = localStorage.getItem('priceTargets');
+            const legacyPortfolioTargets = localStorage.getItem('portfolioTargets');
+            const legacyOpenTradesExpanded = localStorage.getItem('openTradesExpanded');
+            const legacyPortfolioTargetsExpanded = localStorage.getItem('portfolioTargetsExpanded');
+            const legacyPriceTargetsExpanded = localStorage.getItem('priceTargetsExpanded');
+
+            const mainAccount = createDefaultAccount('Main Account');
+
+            // Migrate existing data if it exists
+            if (legacyAccountSize) mainAccount.accountSize = legacyAccountSize;
+            if (legacyTrades) {
+                const parsedTrades = JSON.parse(legacyTrades);
+                mainAccount.trades = parsedTrades.map(trade => ({
+                    ...trade,
+                    isActive: trade.isActive ?? true
+                }));
+            }
+            if (legacyPriceTargets) mainAccount.priceTargets = JSON.parse(legacyPriceTargets);
+            if (legacyPortfolioTargets) mainAccount.portfolioTargets = JSON.parse(legacyPortfolioTargets);
+            if (legacyOpenTradesExpanded !== null) mainAccount.openTradesExpanded = JSON.parse(legacyOpenTradesExpanded);
+            if (legacyPortfolioTargetsExpanded) mainAccount.portfolioTargetsExpanded = JSON.parse(legacyPortfolioTargetsExpanded);
+            if (legacyPriceTargetsExpanded) mainAccount.priceTargetsExpanded = JSON.parse(legacyPriceTargetsExpanded);
+
+            const accounts = { [mainAccount.id]: mainAccount };
+
+            // Save migrated data
+            localStorage.setItem('accounts', JSON.stringify(accounts));
+            localStorage.setItem('currentAccountId', mainAccount.id);
+            localStorage.setItem('accountsList', JSON.stringify([mainAccount.id]));
+
+            return accounts;
+        };
+
         function App() {
+            // Global theme state (not account-scoped)
             const [theme, setTheme] = useState(localStorage.getItem('theme') || 'light');
-            const [accountSize, setAccountSize] = useState(localStorage.getItem('accountSize') || '');
-            const [trades, setTrades] = useState(() => {
-                const savedTrades = localStorage.getItem('trades');
-                if (savedTrades) {
-                    const parsedTrades = JSON.parse(savedTrades);
-                    // Ensure all trades have isActive property (migration for existing data)
-                    return parsedTrades.map(trade => ({
-                        ...trade,
-                        isActive: trade.isActive ?? true
-                    }));
-                }
-                return [];
+
+            // Account management state
+            const [accounts, setAccounts] = useState(() => migrateExistingData());
+            const [currentAccountId, setCurrentAccountId] = useState(() => {
+                return localStorage.getItem('currentAccountId') || Object.keys(migrateExistingData())[0];
             });
+            const [accountsList, setAccountsList] = useState(() => {
+                const saved = localStorage.getItem('accountsList');
+                return saved ? JSON.parse(saved) : [currentAccountId];
+            });
+
+            // Get current account data
+            const currentAccount = accounts[currentAccountId] || createDefaultAccount();
+
+            // Account-scoped state derived from current account
+            const [accountSize, setAccountSize] = useState(currentAccount.accountSize);
+            const [trades, setTrades] = useState(currentAccount.trades);
+            const [priceTargets, setPriceTargets] = useState(currentAccount.priceTargets);
+            const [portfolioTargets, setPortfolioTargets] = useState(currentAccount.portfolioTargets);
+            const [openTradesExpanded, setOpenTradesExpanded] = useState(currentAccount.openTradesExpanded);
+            const [portfolioTargetsExpanded, setPortfolioTargetsExpanded] = useState(currentAccount.portfolioTargetsExpanded);
+            const [priceTargetsExpanded, setPriceTargetsExpanded] = useState(currentAccount.priceTargetsExpanded);
+
+            // Non-account-scoped UI state
             const [showAddForm, setShowAddForm] = useState(false);
             const [editingTradeIndex, setEditingTradeIndex] = useState(null);
             const [livePrices, setLivePrices] = useState({});
             const [lastPriceUpdate, setLastPriceUpdate] = useState(null);
-            const [priceTargets, setPriceTargets] = useState(() => {
-                const savedTargets = localStorage.getItem('priceTargets');
-                return savedTargets ? JSON.parse(savedTargets) : {};
-            });
-            const [portfolioTargets, setPortfolioTargets] = useState(() => {
-                const savedPortfolioTargets = localStorage.getItem('portfolioTargets');
-                return savedPortfolioTargets ? JSON.parse(savedPortfolioTargets) : [1, 2, 3]; // Default to 1%, 2%, 3%
-            });
-            const [openTradesExpanded, setOpenTradesExpanded] = useState(() => {
-                const savedState = localStorage.getItem('openTradesExpanded');
-                return savedState !== null ? JSON.parse(savedState) : true; // Default to expanded
-            });
-            const [portfolioTargetsExpanded, setPortfolioTargetsExpanded] = useState(() => {
-                const savedState = localStorage.getItem('portfolioTargetsExpanded');
-                return savedState !== null ? JSON.parse(savedState) : {}; // Default to empty object (all expanded)
-            });
-            const [priceTargetsExpanded, setPriceTargetsExpanded] = useState(() => {
-                const savedState = localStorage.getItem('priceTargetsExpanded');
-                return savedState !== null ? JSON.parse(savedState) : {}; // Default to empty object (all expanded)
-            });
             const cryptos = ['BTC', 'ETH'];
+
+            // Account management utility function
+            const updateCurrentAccountData = (updates) => {
+                const updatedAccount = { ...accounts[currentAccountId], ...updates };
+                const updatedAccounts = { ...accounts, [currentAccountId]: updatedAccount };
+                setAccounts(updatedAccounts);
+                localStorage.setItem('accounts', JSON.stringify(updatedAccounts));
+            };
 
             const calculateIndividualLiquidationPrice = (trade) => {
                 const numericAccountSize = parseCurrencyInput(accountSize);
@@ -116,6 +178,7 @@
                 }
             };
 
+            // Effect for theme (global, not account-scoped)
             useEffect(() => {
                 if (theme === 'dark') {
                     document.documentElement.classList.add('dark');
@@ -125,8 +188,9 @@
                 localStorage.setItem('theme', theme);
             }, [theme]);
 
+            // Effects for account-scoped data - update current account when state changes
             useEffect(() => {
-                localStorage.setItem('accountSize', accountSize);
+                updateCurrentAccountData({ accountSize });
                 // Recalculate liquidation prices when account size changes
                 if (trades.length > 0) {
                     const updatedTrades = trades.map(trade => ({
@@ -138,29 +202,29 @@
             }, [accountSize]);
 
             useEffect(() => {
-                localStorage.setItem('trades', JSON.stringify(trades));
+                updateCurrentAccountData({ trades });
                 // Recalculate all price targets when trades change
                 recalculateAllPriceTargets();
             }, [trades]);
 
             useEffect(() => {
-                localStorage.setItem('priceTargets', JSON.stringify(priceTargets));
+                updateCurrentAccountData({ priceTargets });
             }, [priceTargets]);
 
             useEffect(() => {
-                localStorage.setItem('portfolioTargets', JSON.stringify(portfolioTargets));
+                updateCurrentAccountData({ portfolioTargets });
             }, [portfolioTargets]);
 
             useEffect(() => {
-                localStorage.setItem('openTradesExpanded', JSON.stringify(openTradesExpanded));
+                updateCurrentAccountData({ openTradesExpanded });
             }, [openTradesExpanded]);
 
             useEffect(() => {
-                localStorage.setItem('portfolioTargetsExpanded', JSON.stringify(portfolioTargetsExpanded));
+                updateCurrentAccountData({ portfolioTargetsExpanded });
             }, [portfolioTargetsExpanded]);
 
             useEffect(() => {
-                localStorage.setItem('priceTargetsExpanded', JSON.stringify(priceTargetsExpanded));
+                updateCurrentAccountData({ priceTargetsExpanded });
             }, [priceTargetsExpanded]);
 
             // Fetch live prices from CoinGecko API
@@ -179,6 +243,101 @@
                 } catch (error) {
                     console.error('Error fetching live prices:', error);
                 }
+            };
+
+            // Account management functions
+            const createAccount = (name) => {
+                const newAccount = createDefaultAccount(name);
+                const newAccounts = { ...accounts, [newAccount.id]: newAccount };
+                const newAccountsList = [...accountsList, newAccount.id];
+
+                setAccounts(newAccounts);
+                setAccountsList(newAccountsList);
+                setCurrentAccountId(newAccount.id);
+
+                // Update all account-scoped state to reflect the new account
+                setAccountSize(newAccount.accountSize);
+                setTrades(newAccount.trades);
+                setPriceTargets(newAccount.priceTargets);
+                setPortfolioTargets(newAccount.portfolioTargets);
+                setOpenTradesExpanded(newAccount.openTradesExpanded);
+                setPortfolioTargetsExpanded(newAccount.portfolioTargetsExpanded);
+                setPriceTargetsExpanded(newAccount.priceTargetsExpanded);
+
+                // Save to localStorage
+                localStorage.setItem('accounts', JSON.stringify(newAccounts));
+                localStorage.setItem('accountsList', JSON.stringify(newAccountsList));
+                localStorage.setItem('currentAccountId', newAccount.id);
+            };
+
+            const switchAccount = (accountId) => {
+                if (accounts[accountId]) {
+                    setCurrentAccountId(accountId);
+                    localStorage.setItem('currentAccountId', accountId);
+
+                    // Update all account-scoped state
+                    const account = accounts[accountId];
+                    setAccountSize(account.accountSize);
+                    setTrades(account.trades);
+                    setPriceTargets(account.priceTargets);
+                    setPortfolioTargets(account.portfolioTargets);
+                    setOpenTradesExpanded(account.openTradesExpanded);
+                    setPortfolioTargetsExpanded(account.portfolioTargetsExpanded);
+                    setPriceTargetsExpanded(account.priceTargetsExpanded);
+
+                    // Reset UI state when switching accounts
+                    setShowAddForm(false);
+                    setEditingTradeIndex(null);
+                }
+            };
+
+            const renameAccount = (accountId, newName) => {
+                if (accounts[accountId] && newName.trim()) {
+                    const updatedAccount = { ...accounts[accountId], name: newName.trim() };
+                    const updatedAccounts = { ...accounts, [accountId]: updatedAccount };
+                    setAccounts(updatedAccounts);
+                    localStorage.setItem('accounts', JSON.stringify(updatedAccounts));
+                }
+            };
+
+            const deleteAccount = (accountId) => {
+                // Prevent deleting the last account
+                if (Object.keys(accounts).length <= 1) {
+                    alert('Cannot delete the last account. You must have at least one account.');
+                    return;
+                }
+
+                const updatedAccounts = { ...accounts };
+                delete updatedAccounts[accountId];
+
+                const updatedAccountsList = accountsList.filter(id => id !== accountId);
+
+                // If deleting current account, switch to the first available account
+                let newCurrentAccountId = currentAccountId;
+                if (currentAccountId === accountId) {
+                    newCurrentAccountId = updatedAccountsList[0];
+                }
+
+                setAccounts(updatedAccounts);
+                setAccountsList(updatedAccountsList);
+
+                if (currentAccountId === accountId) {
+                    setCurrentAccountId(newCurrentAccountId);
+                    localStorage.setItem('currentAccountId', newCurrentAccountId);
+
+                    // Update all account-scoped state to the new current account
+                    const newAccount = updatedAccounts[newCurrentAccountId];
+                    setAccountSize(newAccount.accountSize);
+                    setTrades(newAccount.trades);
+                    setPriceTargets(newAccount.priceTargets);
+                    setPortfolioTargets(newAccount.portfolioTargets);
+                    setOpenTradesExpanded(newAccount.openTradesExpanded);
+                    setPortfolioTargetsExpanded(newAccount.portfolioTargetsExpanded);
+                    setPriceTargetsExpanded(newAccount.priceTargetsExpanded);
+                }
+
+                localStorage.setItem('accounts', JSON.stringify(updatedAccounts));
+                localStorage.setItem('accountsList', JSON.stringify(updatedAccountsList));
             };
 
             // Fetch prices on component mount and set up interval
@@ -521,18 +680,84 @@
 
             return (
                 <div className="container mx-auto p-4 max-w-4xl">
-                    <header className="flex justify-between items-center mb-6">
-                        <h1 className="text-3xl font-bold">Futures Leverage Trading Calculator</h1>
-                        <button 
-                            onClick={toggleTheme}
-                            className="p-2 rounded-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition"
-                        >
-                            {theme === 'light' ? '🌙' : '☀️'}
-                        </button>
+                    <header className="mb-6">
+                        {/* Desktop: Single row layout */}
+                        <div className="hidden sm:flex justify-between items-center">
+                            <h1 className="text-3xl font-bold leading-tight">
+                                Futures Trading Calculator
+                            </h1>
+                            <div className="flex items-center space-x-4 flex-shrink-0">
+                                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Account:</span>
+                                {/* Account Management */}
+                                <div className="relative">
+                                    <AccountSelector
+                                        accounts={accounts}
+                                        accountsList={accountsList}
+                                        currentAccountId={currentAccountId}
+                                        switchAccount={switchAccount}
+                                        createAccount={createAccount}
+                                        renameAccount={renameAccount}
+                                        deleteAccount={deleteAccount}
+                                    />
+                                </div>
+                                {/* Theme Toggle */}
+                                <button
+                                    onClick={toggleTheme}
+                                    className="p-2 rounded-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition"
+                                    title={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}
+                                >
+                                    {theme === 'light' ? '🌙' : '☀️'}
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Mobile: Two row layout */}
+                        <div className="flex sm:hidden flex-col space-y-3">
+                            {/* Title row with theme toggle */}
+                            <div className="flex justify-between items-center">
+                                <h1 className="text-2xl font-bold leading-tight">
+                                    Futures Trading Calculator
+                                </h1>
+                                {/* Theme Toggle */}
+                                <button
+                                    onClick={toggleTheme}
+                                    className="p-2 rounded-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition"
+                                    title={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}
+                                >
+                                    {theme === 'light' ? '🌙' : '☀️'}
+                                </button>
+                            </div>
+                            {/* Account controls row */}
+                            <div className="flex items-center justify-center space-x-4">
+                                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Account:</span>
+                                {/* Account Management */}
+                                <div className="relative">
+                                    <AccountSelector
+                                        accounts={accounts}
+                                        accountsList={accountsList}
+                                        currentAccountId={currentAccountId}
+                                        switchAccount={switchAccount}
+                                        createAccount={createAccount}
+                                        renameAccount={renameAccount}
+                                        deleteAccount={deleteAccount}
+                                    />
+                                </div>
+                            </div>
+                        </div>
                     </header>
 
-                    {/* Account Size */}
+                    {/* Account Info and Size */}
                     <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow mb-6">
+                        <div className="flex items-center justify-between mb-3">
+                            <div className="flex items-center space-x-2">
+                                <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-200">
+                                    {currentAccount.name}
+                                </h2>
+                                <span className="px-2 py-1 text-xs bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded-full">
+                                    Active Account
+                                </span>
+                            </div>
+                        </div>
                         <div className="flex flex-col sm:flex-row sm:items-center space-y-2 sm:space-y-0 sm:space-x-4">
                             <label htmlFor="account-size" className="text-lg font-semibold whitespace-nowrap">Account Size (USD)</label>
                             <input
@@ -1481,6 +1706,260 @@
                                 </p>
                             )}
                         </>
+                    )}
+                </div>
+            );
+        }
+
+        function AccountSelector({ accounts, accountsList, currentAccountId, switchAccount, createAccount, renameAccount, deleteAccount }) {
+            const [showCreateForm, setShowCreateForm] = useState(false);
+            const [newAccountName, setNewAccountName] = useState('');
+            const [showManageMenu, setShowManageMenu] = useState(false);
+            const [showRenameForm, setShowRenameForm] = useState(false);
+            const [renameAccountId, setRenameAccountId] = useState('');
+            const [renameValue, setRenameValue] = useState('');
+            const [showDeleteModal, setShowDeleteModal] = useState(false);
+            const [deleteAccountId, setDeleteAccountId] = useState('');
+
+            const handleCreateAccount = (e) => {
+                e.preventDefault();
+                if (!newAccountName.trim()) {
+                    alert('Please enter an account name.');
+                    return;
+                }
+                createAccount(newAccountName.trim());
+                setNewAccountName('');
+                setShowCreateForm(false);
+            };
+
+            const handleRenameAccount = (e) => {
+                e.preventDefault();
+                if (!renameValue.trim()) {
+                    alert('Please enter a valid account name.');
+                    return;
+                }
+                renameAccount(renameAccountId, renameValue.trim());
+                setShowRenameForm(false);
+                setRenameAccountId('');
+                setRenameValue('');
+            };
+
+            const startRename = (accountId) => {
+                setRenameAccountId(accountId);
+                setRenameValue(accounts[accountId]?.name || '');
+                setShowRenameForm(true);
+                setShowManageMenu(false);
+            };
+
+            const startDelete = (accountId) => {
+                setDeleteAccountId(accountId);
+                setShowDeleteModal(true);
+                setShowManageMenu(false);
+            };
+
+            const confirmDelete = () => {
+                deleteAccount(deleteAccountId);
+                setShowDeleteModal(false);
+                setDeleteAccountId('');
+            };
+
+            const cancelDelete = () => {
+                setShowDeleteModal(false);
+                setDeleteAccountId('');
+            };
+
+            // Close manage menu when clicking outside
+            useEffect(() => {
+                const handleClickOutside = (event) => {
+                    if (showManageMenu && !event.target.closest('.manage-menu-container')) {
+                        setShowManageMenu(false);
+                    }
+                };
+
+                if (showManageMenu) {
+                    document.addEventListener('mousedown', handleClickOutside);
+                    return () => document.removeEventListener('mousedown', handleClickOutside);
+                }
+            }, [showManageMenu]);
+
+            return (
+                <div className="flex items-center space-x-3">
+                    {/* Account Dropdown */}
+                    <div className="relative">
+                        <select
+                            value={currentAccountId}
+                            onChange={(e) => switchAccount(e.target.value)}
+                            className="appearance-none bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 pr-8 text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors"
+                        >
+                            {accountsList.map(accountId => (
+                                <option key={accountId} value={accountId}>
+                                    {accounts[accountId]?.name || 'Unknown Account'}
+                                </option>
+                            ))}
+                        </select>
+                        <div className="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none">
+                            <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                            </svg>
+                        </div>
+                    </div>
+
+                    {/* Manage Account Button */}
+                    <div className="relative manage-menu-container">
+                        <button
+                            onClick={() => setShowManageMenu(!showManageMenu)}
+                            className="flex items-center space-x-1 px-3 py-2 text-sm font-medium text-gray-600 dark:text-gray-300 hover:text-gray-800 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+                            title="Manage Account"
+                        >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
+                            </svg>
+                        </button>
+
+                        {/* Manage Menu Dropdown */}
+                        {showManageMenu && (
+                            <div className="absolute top-full right-0 mt-2 w-48 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg z-50">
+                                <button
+                                    onClick={() => startRename(currentAccountId)}
+                                    className="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                                >
+                                    Rename Account
+                                </button>
+                                {Object.keys(accounts).length > 1 && (
+                                    <button
+                                        onClick={() => startDelete(currentAccountId)}
+                                        className="w-full text-left px-4 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                                    >
+                                        Delete Account
+                                    </button>
+                                )}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Add Account Button */}
+                    <button
+                        onClick={() => setShowCreateForm(!showCreateForm)}
+                        className="flex items-center space-x-1 px-3 py-2 text-sm font-medium text-gray-600 dark:text-gray-300 hover:text-gray-800 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+                        title="Create New Account"
+                    >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                        </svg>
+                        <span>New</span>
+                    </button>
+
+                    {/* Create Account Form */}
+                    {showCreateForm && (
+                        <div className="absolute top-full left-0 mt-2 p-4 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg z-50 min-w-64">
+                            <form onSubmit={handleCreateAccount}>
+                                <div className="mb-3">
+                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                        Account Name
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={newAccountName}
+                                        onChange={(e) => setNewAccountName(e.target.value)}
+                                        placeholder="Enter account name"
+                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                        autoFocus
+                                    />
+                                </div>
+                                <div className="flex justify-end space-x-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setShowCreateForm(false);
+                                            setNewAccountName('');
+                                        }}
+                                        className="px-3 py-1 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 transition-colors"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        type="submit"
+                                        className="px-3 py-1 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors"
+                                    >
+                                        Create
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    )}
+
+                    {/* Rename Account Form */}
+                    {showRenameForm && (
+                        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                            <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-xl max-w-md w-full mx-4">
+                                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">
+                                    Rename Account
+                                </h3>
+                                <form onSubmit={handleRenameAccount}>
+                                    <div className="mb-4">
+                                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                            Account Name
+                                        </label>
+                                        <input
+                                            type="text"
+                                            value={renameValue}
+                                            onChange={(e) => setRenameValue(e.target.value)}
+                                            placeholder="Enter new account name"
+                                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                            autoFocus
+                                        />
+                                    </div>
+                                    <div className="flex justify-end space-x-3">
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setShowRenameForm(false);
+                                                setRenameAccountId('');
+                                                setRenameValue('');
+                                            }}
+                                            className="px-4 py-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 transition-colors"
+                                        >
+                                            Cancel
+                                        </button>
+                                        <button
+                                            type="submit"
+                                            className="px-4 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
+                                        >
+                                            Rename
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Delete Confirmation Modal */}
+                    {showDeleteModal && (
+                        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                            <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-xl max-w-md w-full mx-4">
+                                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">
+                                    Delete Account
+                                </h3>
+                                <p className="text-gray-600 dark:text-gray-400 mb-6">
+                                    Are you sure you want to delete the account "{accounts[deleteAccountId]?.name}"?
+                                    This action cannot be undone and all account data will be permanently lost.
+                                </p>
+                                <div className="flex justify-end space-x-3">
+                                    <button
+                                        onClick={cancelDelete}
+                                        className="px-4 py-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 transition-colors"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        onClick={confirmDelete}
+                                        className="px-4 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
+                                    >
+                                        Delete Account
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
                     )}
                 </div>
             );
