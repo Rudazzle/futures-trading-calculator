@@ -533,13 +533,13 @@
 
                     {/* Account Size */}
                     <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow mb-6">
-                        <div className="flex items-center space-x-4">
+                        <div className="flex flex-col sm:flex-row sm:items-center space-y-2 sm:space-y-0 sm:space-x-4">
                             <label htmlFor="account-size" className="text-lg font-semibold whitespace-nowrap">Account Size (USD)</label>
                             <input
                                 id="account-size"
                                 type="text"
                                 placeholder="0.00"
-                                className="flex-1 p-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
+                                className="flex-1 p-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 min-w-0"
                                 value={accountSize}
                                 onChange={(e) => setAccountSize(formatCurrencyInput(e.target.value))}
                             />
@@ -1208,12 +1208,26 @@
                                     {Object.values(priceTargets).map((target) => {
                                         const percentages = calculateProfitPercentages(crypto, target.profitData);
                                         return (
-                                            <div key={target.id} className="flex items-center justify-between p-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded">
-                                                <div className="flex items-center space-x-3">
+                                            <div key={target.id} className="relative p-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded">
+                                                {/* Close button in upper right corner */}
+                                                <button
+                                                    onClick={() => removePriceTarget(target.id)}
+                                                    className="absolute top-2 right-2 w-6 h-6 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition flex items-center justify-center text-lg font-normal"
+                                                    title="Remove target"
+                                                >
+                                                    ×
+                                                </button>
+
+                                                {/* Price target at the top */}
+                                                <div className="pr-8 mb-2">
                                                     <span className="font-medium text-sm">
                                                         {formatUSD(target.targetPrice)} Target
                                                     </span>
-                                                    <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                                                </div>
+
+                                                {/* Badges below the price target */}
+                                                <div className="flex flex-wrap gap-2">
+                                                    <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium whitespace-nowrap ${
                                                         target.profitData.totalProfit >= 0
                                                             ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
                                                             : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
@@ -1222,7 +1236,7 @@
                                                     </span>
                                                     {percentages && (
                                                         <>
-                                                            <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                                                            <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium whitespace-nowrap ${
                                                                 target.profitData.totalProfit >= 0
                                                                     ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
                                                                     : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
@@ -1230,7 +1244,7 @@
                                                                 Trade P/L: {percentages.tradeProfitPercentage >= 0 ? '+' : ''}{percentages.tradeProfitPercentage.toFixed(2)}%
                                                             </span>
                                                             {parseCurrencyInput(accountSize) > 0 && (
-                                                                <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                                                                <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium whitespace-nowrap ${
                                                                     target.profitData.totalProfit >= 0
                                                                         ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
                                                                         : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
@@ -1241,13 +1255,6 @@
                                                         </>
                                                     )}
                                                 </div>
-                                                <button
-                                                    onClick={() => removePriceTarget(target.id)}
-                                                    className="w-6 h-6 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition flex items-center justify-center text-lg font-normal"
-                                                    title="Remove target"
-                                                >
-                                                    ×
-                                                </button>
                                             </div>
                                         );
                                     })}
@@ -1292,10 +1299,11 @@
             if (!showSection) {
                 return (
                     <div className="mb-6 p-4 border rounded-lg border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700">
-                        <div className="flex justify-between items-center">
+                        <div className="flex justify-between items-center mb-3">
                             <div className="flex items-center space-x-3">
                                 <h3 className="text-lg font-semibold">{crypto} Portfolio Targets</h3>
-                                {currentPrice && currentProfitData && (
+                                {/* Show current badge inline only when expanded */}
+                                {isExpanded && currentPrice && currentProfitData && (
                                     <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
                                         currentProfitData.totalProfit >= 0
                                             ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
@@ -1313,7 +1321,21 @@
                                 {isExpanded ? '−' : '+'}
                             </button>
                         </div>
-                        <p className="text-gray-600 dark:text-gray-400 text-sm mt-3">
+
+                        {/* Show current badge below header when minimized */}
+                        {!isExpanded && currentPrice && currentProfitData && (
+                            <div className="mb-3">
+                                <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                                    currentProfitData.totalProfit >= 0
+                                        ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
+                                        : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+                                }`}>
+                                    Current: {((currentProfitData.totalProfit / parseCurrencyInput(accountSize)) * 100).toFixed(2)}% • {formatUSD(currentPrice)}
+                                </span>
+                            </div>
+                        )}
+
+                        <p className="text-gray-600 dark:text-gray-400 text-sm">
                             Please set an account size to view portfolio targets.
                         </p>
                     </div>
@@ -1325,7 +1347,8 @@
                     <div className="flex justify-between items-center mb-3">
                         <div className="flex items-center space-x-3">
                             <h3 className="text-lg font-semibold">{crypto} Portfolio Targets</h3>
-                            {currentPrice && currentProfitData && (
+                            {/* Show current badge inline only when expanded */}
+                            {isExpanded && currentPrice && currentProfitData && (
                                 <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
                                     currentProfitData.totalProfit >= 0
                                         ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
@@ -1343,6 +1366,19 @@
                             {isExpanded ? '−' : '+'}
                         </button>
                     </div>
+
+                    {/* Show current badge below header when minimized */}
+                    {!isExpanded && currentPrice && currentProfitData && (
+                        <div className="mb-3">
+                            <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                                currentProfitData.totalProfit >= 0
+                                    ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
+                                    : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+                            }`}>
+                                Current: {((currentProfitData.totalProfit / parseCurrencyInput(accountSize)) * 100).toFixed(2)}% • {formatUSD(currentPrice)}
+                            </span>
+                        </div>
+                    )}
 
                     {/* Compact view when collapsed - horizontal badges */}
                     {!isExpanded && portfolioTargets.length > 0 && (
