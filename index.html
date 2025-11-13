@@ -152,6 +152,7 @@
             // Non-account-scoped UI state
             const [showAddForm, setShowAddForm] = useState(false);
             const [editingTradeIndex, setEditingTradeIndex] = useState(null);
+            const [inlineEditingTrade, setInlineEditingTrade] = useState(null);
             const [livePrices, setLivePrices] = useState({});
             const [lastPriceUpdate, setLastPriceUpdate] = useState(null);
             const cryptos = ['BTC', 'ETH'];
@@ -288,6 +289,7 @@
                     // Reset UI state when switching accounts
                     setShowAddForm(false);
                     setEditingTradeIndex(null);
+                    setInlineEditingTrade(null);
                 }
             };
 
@@ -372,6 +374,7 @@
                 newTrades[index] = { ...updatedTrade, notionalValue, marginUsed, liqPrice, isActive: trades[index].isActive ?? true };
                 setTrades(newTrades);
                 setEditingTradeIndex(null);
+                setInlineEditingTrade(null);
             };
 
             const deleteTrade = (index) => {
@@ -379,6 +382,9 @@
                 setTrades(newTrades);
                 if (editingTradeIndex === index) {
                     setEditingTradeIndex(null);
+                }
+                if (inlineEditingTrade === index) {
+                    setInlineEditingTrade(null);
                 }
             };
 
@@ -834,6 +840,7 @@
                                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-4">
                                         {trades.map((trade, index) => {
                                             const isActive = trade.isActive ?? true;
+                                            const isInlineEditing = inlineEditingTrade === index;
                                             return (
                                     <div key={index} className={`border p-4 rounded-lg border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-sm hover:shadow-md dark:hover:shadow-lg transition-shadow ${!isActive ? 'opacity-50' : ''}`}>
                                         <div className="flex justify-between items-start mb-3">
@@ -859,58 +866,76 @@
                                             </span>
                                         </div>
 
-                                        <div className="space-y-2 mb-4">
-                                            <div className="flex justify-between">
-                                                <span className="text-sm text-gray-600 dark:text-gray-400">Size:</span>
-                                                <span className="text-sm font-medium">{trade.positionSize.toFixed(4)}</span>
-                                            </div>
-                                            <div className="flex justify-between">
-                                                <span className="text-sm text-gray-600 dark:text-gray-400">Entry:</span>
-                                                <span className="text-sm font-medium">{formatUSD(trade.entryPrice)}</span>
-                                            </div>
-                                            <div className="flex justify-between">
-                                                <span className="text-sm text-gray-600 dark:text-gray-400">Leverage:</span>
-                                                <span className="text-sm font-medium">{trade.leverage.toFixed(1)}x</span>
-                                            </div>
-                                            <div className="flex justify-between">
-                                                <span className="text-sm text-gray-600 dark:text-gray-400">Margin:</span>
-                                                <span className="text-sm font-medium">{formatUSD(trade.marginUsed)}</span>
-                                            </div>
-                                            <div className="flex justify-between">
-                                                <span className="text-sm text-gray-600 dark:text-gray-400">Liq Price:</span>
-                                                <span className="text-sm font-medium text-red-600 dark:text-red-400">
-                                                    {formatUSD(trade.liqPrice)}
-                                                </span>
-                                            </div>
+                                        <div className="mb-4">
+                                            {isInlineEditing ? (
+                                                <InlineTradeEdit
+                                                    trade={trade}
+                                                    index={index}
+                                                    updateTrade={updateTrade}
+                                                    onCancel={() => setInlineEditingTrade(null)}
+                                                    formatCurrencyInput={formatCurrencyInput}
+                                                    parseCurrencyInput={parseCurrencyInput}
+                                                    formatUSD={formatUSD}
+                                                />
+                                            ) : (
+                                                <div className="space-y-2">
+                                                    <div className="flex justify-between">
+                                                        <span className="text-sm text-gray-600 dark:text-gray-400">Size:</span>
+                                                        <span className="text-sm font-medium">{trade.positionSize.toFixed(4)}</span>
+                                                    </div>
+                                                    <div className="flex justify-between">
+                                                        <span className="text-sm text-gray-600 dark:text-gray-400">Entry:</span>
+                                                        <span className="text-sm font-medium">{formatUSD(trade.entryPrice)}</span>
+                                                    </div>
+                                                    <div className="flex justify-between">
+                                                        <span className="text-sm text-gray-600 dark:text-gray-400">Leverage:</span>
+                                                        <span className="text-sm font-medium">{trade.leverage.toFixed(1)}x</span>
+                                                    </div>
+                                                    <div className="flex justify-between">
+                                                        <span className="text-sm text-gray-600 dark:text-gray-400">Margin:</span>
+                                                        <span className="text-sm font-medium">{formatUSD(trade.marginUsed)}</span>
+                                                    </div>
+                                                    <div className="flex justify-between">
+                                                        <span className="text-sm text-gray-600 dark:text-gray-400">Liq Price:</span>
+                                                        <span className="text-sm font-medium text-red-600 dark:text-red-400">
+                                                            {formatUSD(trade.liqPrice)}
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            )}
                                         </div>
 
-                                        <div className="flex space-x-2 mb-2">
-                                            <button
-                                                onClick={() => toggleTradeActive(index)}
-                                                className={`flex-1 text-white text-sm py-2 px-3 rounded transition ${
-                                                    isActive
-                                                        ? 'bg-orange-500 hover:bg-orange-600'
-                                                        : 'bg-green-500 hover:bg-green-600'
-                                                }`}
-                                            >
-                                                {isActive ? 'Deactivate' : 'Activate'}
-                                            </button>
-                                        </div>
-                                        <div className="flex space-x-2">
-                                            <button
-                                                onClick={() => setEditingTradeIndex(index)}
-                                                className="flex-1 bg-blue-500 text-white text-sm py-2 px-3 rounded hover:bg-blue-600 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                                                disabled={editingTradeIndex !== null}
-                                            >
-                                                Edit
-                                            </button>
-                                            <button
-                                                onClick={() => deleteTrade(index)}
-                                                className="flex-1 bg-red-500 text-white text-sm py-2 px-3 rounded hover:bg-red-600 transition"
-                                            >
-                                                Delete
-                                            </button>
-                                        </div>
+                                        {!isInlineEditing && (
+                                            <>
+                                                <div className="flex space-x-2 mb-2">
+                                                    <button
+                                                        onClick={() => toggleTradeActive(index)}
+                                                        className={`flex-1 text-white text-sm py-2 px-3 rounded transition ${
+                                                            isActive
+                                                                ? 'bg-orange-500 hover:bg-orange-600'
+                                                                : 'bg-green-500 hover:bg-green-600'
+                                                        }`}
+                                                    >
+                                                        {isActive ? 'Deactivate' : 'Activate'}
+                                                    </button>
+                                                </div>
+                                                <div className="flex space-x-2">
+                                                    <button
+                                                        onClick={() => setInlineEditingTrade(index)}
+                                                        className="flex-1 bg-blue-500 text-white text-sm py-2 px-3 rounded hover:bg-blue-600 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                                                        disabled={inlineEditingTrade !== null}
+                                                    >
+                                                        Edit
+                                                    </button>
+                                                    <button
+                                                        onClick={() => deleteTrade(index)}
+                                                        className="flex-1 bg-red-500 text-white text-sm py-2 px-3 rounded hover:bg-red-600 transition"
+                                                    >
+                                                        Delete
+                                                    </button>
+                                                </div>
+                                            </>
+                                        )}
                                     </div>
                                             );
                                         })}
@@ -1015,7 +1040,7 @@
             const [direction, setDirection] = useState('long');
             const [entryPrice, setEntryPrice] = useState('');
             const [positionSize, setPositionSize] = useState('');
-            const [leverage, setLeverage] = useState('');
+            const [leverage, setLeverage] = useState('10');
 
             const handleSubmit = (e) => {
                 e.preventDefault();
@@ -1029,7 +1054,7 @@
                 addTrade({ crypto, direction, entryPrice: ep, positionSize: ps, leverage: lev });
                 setEntryPrice('');
                 setPositionSize('');
-                setLeverage('');
+                setLeverage('10');
             };
 
             return (
@@ -1085,7 +1110,32 @@
                             />
                         </div>
                         <div>
-                            <label htmlFor="add-leverage" className="block mb-1">Leverage</label>
+                            <div className="flex items-center justify-between mb-1">
+                                <label htmlFor="add-leverage" className="block">Leverage</label>
+                                <div className="flex space-x-1">
+                                    <button
+                                        type="button"
+                                        onClick={() => setLeverage('1')}
+                                        className="px-2 py-1 text-xs bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-300 dark:hover:bg-gray-500 transition"
+                                    >
+                                        1x
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setLeverage('10')}
+                                        className="px-2 py-1 text-xs bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-300 dark:hover:bg-gray-500 transition"
+                                    >
+                                        10x
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setLeverage('20')}
+                                        className="px-2 py-1 text-xs bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-300 dark:hover:bg-gray-500 transition"
+                                    >
+                                        20x
+                                    </button>
+                                </div>
+                            </div>
                             <input
                                 id="add-leverage"
                                 type="number"
@@ -1106,6 +1156,85 @@
                             </button>
                         </div>
                     </form>
+                </div>
+            );
+        }
+
+        // Inline edit component for trade cards
+        function InlineTradeEdit({ trade, index, updateTrade, onCancel, formatCurrencyInput, parseCurrencyInput, formatUSD }) {
+            const [positionSize, setPositionSize] = useState(trade.positionSize.toString());
+            const [entryPrice, setEntryPrice] = useState(formatCurrencyInput ? formatCurrencyInput(trade.entryPrice.toString()) : trade.entryPrice.toString());
+            const [leverage, setLeverage] = useState(trade.leverage.toString());
+
+            const handleSave = () => {
+                const ep = parseCurrencyInput ? parseCurrencyInput(entryPrice) : parseFloat(entryPrice.replace(/,/g, ''));
+                const ps = parseFloat(positionSize);
+                const lev = parseFloat(leverage);
+
+                if (isNaN(ep) || isNaN(ps) || isNaN(lev) || lev <= 0 || ep <= 0 || ps <= 0) {
+                    alert('Please enter valid numbers for entry price, position size, and leverage (all must be greater than 0).');
+                    return;
+                }
+
+                updateTrade(index, {
+                    ...trade,
+                    entryPrice: ep,
+                    positionSize: ps,
+                    leverage: lev
+                });
+            };
+
+            return (
+                <div className="space-y-3">
+                    <div className="flex justify-between items-center">
+                        <span className="text-sm text-gray-600 dark:text-gray-400">Size:</span>
+                        <input
+                            type="number"
+                            step="0.0001"
+                            min="0"
+                            className="w-24 p-1 text-sm border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 text-right"
+                            value={positionSize}
+                            onChange={(e) => setPositionSize(e.target.value)}
+                        />
+                    </div>
+                    <div className="flex justify-between items-center">
+                        <span className="text-sm text-gray-600 dark:text-gray-400">Entry:</span>
+                        <input
+                            type="text"
+                            className="w-24 p-1 text-sm border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 text-right"
+                            value={entryPrice}
+                            onChange={(e) => setEntryPrice(formatCurrencyInput ? formatCurrencyInput(e.target.value) : e.target.value)}
+                        />
+                    </div>
+                    <div className="flex justify-between items-center">
+                        <span className="text-sm text-gray-600 dark:text-gray-400">Leverage:</span>
+                        <input
+                            type="number"
+                            step="0.1"
+                            min="1"
+                            className="w-24 p-1 text-sm border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 text-right"
+                            value={leverage}
+                            onChange={(e) => setLeverage(e.target.value)}
+                        />
+                    </div>
+                    <div className="flex justify-between items-center">
+                        <span className="text-sm text-gray-600 dark:text-gray-400">Margin:</span>
+                        <span className="text-sm font-medium">{formatUSD((parseFloat(positionSize) || 0) * (parseCurrencyInput ? parseCurrencyInput(entryPrice) : parseFloat(entryPrice.replace(/,/g, '')) || 0) / (parseFloat(leverage) || 1))}</span>
+                    </div>
+                    <div className="flex space-x-2 pt-2">
+                        <button
+                            onClick={handleSave}
+                            className="flex-1 bg-green-500 text-white text-xs py-2 px-2 rounded hover:bg-green-600 transition"
+                        >
+                            Save
+                        </button>
+                        <button
+                            onClick={onCancel}
+                            className="flex-1 bg-gray-500 text-white text-xs py-2 px-2 rounded hover:bg-gray-600 transition"
+                        >
+                            Cancel
+                        </button>
+                    </div>
                 </div>
             );
         }
