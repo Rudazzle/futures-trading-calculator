@@ -70,6 +70,8 @@
             return {
                 id: generateAccountId(),
                 name: name,
+                baseAccountSize: '',
+                additionalFunds: '',
                 accountSize: '',
                 trades: [],
                 priceTargets: {},
@@ -84,7 +86,28 @@
             // Check if we already have the new account structure
             const existingAccounts = localStorage.getItem('accounts');
             if (existingAccounts) {
-                return JSON.parse(existingAccounts);
+                const accounts = JSON.parse(existingAccounts);
+                // Migrate existing accounts to include baseAccountSize and additionalFunds if they don't have them
+                let needsUpdate = false;
+                Object.keys(accounts).forEach(accountId => {
+                    const account = accounts[accountId];
+                    if (account.baseAccountSize === undefined) {
+                        account.baseAccountSize = account.accountSize || '';
+                        account.additionalFunds = '';
+                        needsUpdate = true;
+                    } else if (!account.baseAccountSize || account.baseAccountSize === '' || account.baseAccountSize === '0' || account.baseAccountSize === '0.00') {
+                        // If baseAccountSize is empty or $0, use the accountSize value
+                        if (account.accountSize && account.accountSize !== '' && account.accountSize !== '0' && account.accountSize !== '0.00') {
+                            account.baseAccountSize = account.accountSize;
+                            account.additionalFunds = account.additionalFunds || '';
+                            needsUpdate = true;
+                        }
+                    }
+                });
+                if (needsUpdate) {
+                    localStorage.setItem('accounts', JSON.stringify(accounts));
+                }
+                return accounts;
             }
 
             // Migrate existing data to new structure
@@ -99,7 +122,11 @@
             const mainAccount = createDefaultAccount('Main Account');
 
             // Migrate existing data if it exists
-            if (legacyAccountSize) mainAccount.accountSize = legacyAccountSize;
+            if (legacyAccountSize) {
+                mainAccount.baseAccountSize = legacyAccountSize;
+                mainAccount.additionalFunds = '';
+                mainAccount.accountSize = legacyAccountSize;
+            }
             if (legacyTrades) {
                 const parsedTrades = JSON.parse(legacyTrades);
                 mainAccount.trades = parsedTrades.map(trade => ({
@@ -141,7 +168,9 @@
             const currentAccount = accounts[currentAccountId] || createDefaultAccount();
 
             // Account-scoped state derived from current account
-            const [accountSize, setAccountSize] = useState(currentAccount.accountSize);
+            const [baseAccountSize, setBaseAccountSize] = useState(currentAccount.baseAccountSize || '');
+            const [additionalFunds, setAdditionalFunds] = useState(currentAccount.additionalFunds || '');
+            const [accountSize, setAccountSize] = useState(currentAccount.accountSize || '');
             const [trades, setTrades] = useState(currentAccount.trades);
             const [priceTargets, setPriceTargets] = useState(currentAccount.priceTargets);
             const [portfolioTargets, setPortfolioTargets] = useState(currentAccount.portfolioTargets);
@@ -189,9 +218,18 @@
                 localStorage.setItem('theme', theme);
             }, [theme]);
 
+            // Effect to calculate total account size when base or additional funds change
+            useEffect(() => {
+                const baseValue = parseCurrencyInput(baseAccountSize);
+                const additionalValue = parseCurrencyInput(additionalFunds);
+                const totalValue = baseValue + additionalValue;
+                const formattedTotal = totalValue > 0 ? formatCurrencyInput(totalValue.toString()) : '';
+                setAccountSize(formattedTotal);
+            }, [baseAccountSize, additionalFunds]);
+
             // Effects for account-scoped data - update current account when state changes
             useEffect(() => {
-                updateCurrentAccountData({ accountSize });
+                updateCurrentAccountData({ baseAccountSize, additionalFunds, accountSize });
                 // Recalculate liquidation prices when account size changes
                 if (trades.length > 0) {
                     const updatedTrades = trades.map(trade => ({
@@ -257,7 +295,9 @@
                 setCurrentAccountId(newAccount.id);
 
                 // Update all account-scoped state to reflect the new account
-                setAccountSize(newAccount.accountSize);
+                setBaseAccountSize(newAccount.baseAccountSize || '');
+                setAdditionalFunds(newAccount.additionalFunds || '');
+                setAccountSize(newAccount.accountSize || '');
                 setTrades(newAccount.trades);
                 setPriceTargets(newAccount.priceTargets);
                 setPortfolioTargets(newAccount.portfolioTargets);
@@ -278,7 +318,9 @@
 
                     // Update all account-scoped state
                     const account = accounts[accountId];
-                    setAccountSize(account.accountSize);
+                    setBaseAccountSize(account.baseAccountSize || '');
+                    setAdditionalFunds(account.additionalFunds || '');
+                    setAccountSize(account.accountSize || '');
                     setTrades(account.trades);
                     setPriceTargets(account.priceTargets);
                     setPortfolioTargets(account.portfolioTargets);
@@ -329,7 +371,9 @@
 
                     // Update all account-scoped state to the new current account
                     const newAccount = updatedAccounts[newCurrentAccountId];
-                    setAccountSize(newAccount.accountSize);
+                    setBaseAccountSize(newAccount.baseAccountSize || '');
+                    setAdditionalFunds(newAccount.additionalFunds || '');
+                    setAccountSize(newAccount.accountSize || '');
                     setTrades(newAccount.trades);
                     setPriceTargets(newAccount.priceTargets);
                     setPortfolioTargets(newAccount.portfolioTargets);
@@ -465,6 +509,37 @@
                 return netValue / netSize;
             };
 
+            // Calculate separate breakeven prices for long and short positions
+            const calculateLongBreakevenPrice = (crypto) => {
+                const cryptoTrades = trades.filter(trade => trade.crypto === crypto && trade.direction === 'long' && (trade.isActive ?? true));
+                if (cryptoTrades.length === 0) return null;
+
+                let totalLongSize = 0;
+                let totalLongValue = 0;
+
+                cryptoTrades.forEach(trade => {
+                    totalLongSize += trade.positionSize;
+                    totalLongValue += trade.positionSize * trade.entryPrice;
+                });
+
+                return totalLongSize > 0 ? totalLongValue / totalLongSize : null;
+            };
+
+            const calculateShortBreakevenPrice = (crypto) => {
+                const cryptoTrades = trades.filter(trade => trade.crypto === crypto && trade.direction === 'short' && (trade.isActive ?? true));
+                if (cryptoTrades.length === 0) return null;
+
+                let totalShortSize = 0;
+                let totalShortValue = 0;
+
+                cryptoTrades.forEach(trade => {
+                    totalShortSize += trade.positionSize;
+                    totalShortValue += trade.positionSize * trade.entryPrice;
+                });
+
+                return totalShortSize > 0 ? totalShortValue / totalShortSize : null;
+            };
+
             const calculateLiquidationPrice = (crypto) => {
                 const cryptoTrades = trades.filter(trade => trade.crypto === crypto && (trade.isActive ?? true));
                 if (cryptoTrades.length === 0) return null;
@@ -525,6 +600,63 @@
                 return { profits, totalProfit };
             };
 
+            // Calculate profit data grouped by direction (long vs short)
+            const calculateGroupedProfit = (crypto, targetPrice) => {
+                const cryptoTrades = trades.filter(trade => trade.crypto === crypto && (trade.isActive ?? true));
+
+                let longTrades = [];
+                let shortTrades = [];
+                let totalLongProfit = 0;
+                let totalShortProfit = 0;
+                let totalProfit = 0;
+
+                cryptoTrades.forEach(trade => {
+                    const profit = trade.direction === 'long'
+                        ? trade.positionSize * (targetPrice - trade.entryPrice)
+                        : trade.positionSize * (trade.entryPrice - targetPrice);
+
+                    totalProfit += profit;
+
+                    if (trade.direction === 'long') {
+                        longTrades.push({ ...trade, profit });
+                        totalLongProfit += profit;
+                    } else {
+                        shortTrades.push({ ...trade, profit });
+                        totalShortProfit += profit;
+                    }
+                });
+
+                const groupedProfits = [];
+
+                // Add long position group if there are long trades
+                if (longTrades.length > 0) {
+                    groupedProfits.push({
+                        direction: 'long',
+                        trades: longTrades,
+                        totalProfit: totalLongProfit,
+                        tradeCount: longTrades.length,
+                        // Calculate weighted average entry price for display
+                        avgEntryPrice: longTrades.reduce((sum, trade) => sum + (trade.positionSize * trade.entryPrice), 0) /
+                                      longTrades.reduce((sum, trade) => sum + trade.positionSize, 0)
+                    });
+                }
+
+                // Add short position group if there are short trades
+                if (shortTrades.length > 0) {
+                    groupedProfits.push({
+                        direction: 'short',
+                        trades: shortTrades,
+                        totalProfit: totalShortProfit,
+                        tradeCount: shortTrades.length,
+                        // Calculate weighted average entry price for display
+                        avgEntryPrice: shortTrades.reduce((sum, trade) => sum + (trade.positionSize * trade.entryPrice), 0) /
+                                       shortTrades.reduce((sum, trade) => sum + trade.positionSize, 0)
+                    });
+                }
+
+                return { groupedProfits, totalProfit };
+            };
+
             const calculateCurrentProfit = (crypto) => {
                 const currentPrice = livePrices[crypto];
                 if (!currentPrice) return null;
@@ -559,6 +691,7 @@
             const addPriceTarget = (crypto, targetPrice) => {
                 const targetId = Date.now().toString();
                 const profitData = calculateProfit(crypto, targetPrice);
+                const groupedProfitData = calculateGroupedProfit(crypto, targetPrice);
 
                 setPriceTargets(prev => ({
                     ...prev,
@@ -568,6 +701,7 @@
                             id: targetId,
                             targetPrice: targetPrice,
                             profitData: profitData,
+                            groupedProfitData: groupedProfitData,
                             createdAt: new Date().toISOString()
                         }
                     }
@@ -594,9 +728,11 @@
                         Object.keys(newTargets[crypto]).forEach(targetId => {
                             const target = newTargets[crypto][targetId];
                             const updatedProfitData = calculateProfit(crypto, target.targetPrice);
+                            const updatedGroupedProfitData = calculateGroupedProfit(crypto, target.targetPrice);
                             newTargets[crypto][targetId] = {
                                 ...target,
-                                profitData: updatedProfitData
+                                profitData: updatedProfitData,
+                                groupedProfitData: updatedGroupedProfitData
                             };
                         });
                     });
@@ -764,16 +900,37 @@
                                 </span>
                             </div>
                         </div>
-                        <div className="flex flex-col sm:flex-row sm:items-center space-y-2 sm:space-y-0 sm:space-x-4">
-                            <label htmlFor="account-size" className="text-lg font-semibold whitespace-nowrap">Account Size (USD)</label>
-                            <input
-                                id="account-size"
-                                type="text"
-                                placeholder="0.00"
-                                className="flex-1 p-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 min-w-0"
-                                value={accountSize}
-                                onChange={(e) => setAccountSize(formatCurrencyInput(e.target.value))}
-                            />
+                        <div className="space-y-2 sm:space-y-3">
+                            <div className="flex flex-row items-center space-x-2 sm:space-x-4">
+                                <label htmlFor="base-account-size" className="text-xs sm:text-lg font-semibold whitespace-nowrap w-32 sm:w-48 flex-shrink-0">Account Size (USD)</label>
+                                <input
+                                    id="base-account-size"
+                                    type="text"
+                                    placeholder="0.00"
+                                    className="flex-1 p-1 sm:p-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 min-w-0 text-sm sm:text-base"
+                                    value={baseAccountSize}
+                                    onChange={(e) => setBaseAccountSize(formatCurrencyInput(e.target.value))}
+                                />
+                            </div>
+                            <div className="flex flex-row items-center space-x-2 sm:space-x-4">
+                                <label htmlFor="additional-funds" className="text-xs sm:text-lg font-semibold whitespace-nowrap w-32 sm:w-48 flex-shrink-0">Additional Funds</label>
+                                <input
+                                    id="additional-funds"
+                                    type="text"
+                                    placeholder="0.00"
+                                    className="flex-1 p-1 sm:p-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 min-w-0 text-sm sm:text-base"
+                                    value={additionalFunds}
+                                    onChange={(e) => setAdditionalFunds(formatCurrencyInput(e.target.value))}
+                                />
+                            </div>
+                            {(parseCurrencyInput(baseAccountSize) > 0 || parseCurrencyInput(additionalFunds) > 0) && (
+                                <div className="flex flex-row items-center space-x-2 sm:space-x-4 pt-2 border-t dark:border-gray-600">
+                                    <span className="text-xs sm:text-lg font-semibold whitespace-nowrap w-32 sm:w-48 flex-shrink-0">Total Account Size</span>
+                                    <div className="flex-1 p-1 sm:p-2 bg-gray-100 dark:bg-gray-700 rounded border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-gray-100 font-semibold text-sm sm:text-base">
+                                        {formatUSD(parseCurrencyInput(accountSize))}
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     </div>
 
@@ -1002,6 +1159,8 @@
                                 const cryptoTrades = trades.filter(trade => trade.crypto === crypto && (trade.isActive ?? true));
                                 if (cryptoTrades.length === 0) return null;
                                 const breakevenPrice = calculateBreakevenPrice(crypto);
+                                const longBreakevenPrice = calculateLongBreakevenPrice(crypto);
+                                const shortBreakevenPrice = calculateShortBreakevenPrice(crypto);
                                 const liquidationPrice = calculateLiquidationPrice(crypto);
                                 const currentPrice = livePrices[crypto];
                                 const currentProfitData = calculateCurrentProfit(crypto);
@@ -1011,6 +1170,8 @@
                                         key={crypto}
                                         crypto={crypto}
                                         breakevenPrice={breakevenPrice}
+                                        longBreakevenPrice={longBreakevenPrice}
+                                        shortBreakevenPrice={shortBreakevenPrice}
                                         liquidationPrice={liquidationPrice}
                                         currentPrice={currentPrice}
                                         currentProfitData={currentProfitData}
@@ -1019,6 +1180,7 @@
                                         addPriceTarget={(targetPrice) => addPriceTarget(crypto, targetPrice)}
                                         removePriceTarget={(targetId) => removePriceTarget(crypto, targetId)}
                                         calculateProfit={(targetPrice) => calculateProfit(crypto, targetPrice)}
+                                        calculateGroupedProfit={(targetPrice) => calculateGroupedProfit(crypto, targetPrice)}
                                         calculateProfitPercentages={(crypto, profitData) => calculateProfitPercentages(crypto, profitData)}
                                         formatUSD={formatUSD}
                                         formatCurrencyInput={formatCurrencyInput}
@@ -1343,7 +1505,7 @@
             );
         }
 
-        function PriceTargetSection({ crypto, breakevenPrice, liquidationPrice, currentPrice, currentProfitData, lastPriceUpdate, priceTargets, addPriceTarget, removePriceTarget, calculateProfit, calculateProfitPercentages, formatUSD, formatCurrencyInput, parseCurrencyInput, accountSize, isExpanded, toggleExpansion }) {
+        function PriceTargetSection({ crypto, breakevenPrice, longBreakevenPrice, shortBreakevenPrice, liquidationPrice, currentPrice, currentProfitData, lastPriceUpdate, priceTargets, addPriceTarget, removePriceTarget, calculateProfit, calculateGroupedProfit, calculateProfitPercentages, formatUSD, formatCurrencyInput, parseCurrencyInput, accountSize, isExpanded, toggleExpansion }) {
             const [targetPrice, setTargetPrice] = useState('');
 
             const handleCalculate = () => {
@@ -1370,106 +1532,166 @@
                     </div>
 
                     {/* Current Price, Breakeven and Liquidation Price Display */}
-                    <div className="mb-4 grid grid-cols-1 lg:grid-cols-5 gap-4">
-                        {/* Combined Current Price and Profit/Loss - Takes 3 out of 5 columns (60% instead of 66.7%) */}
-                        <div className={`lg:col-span-3 p-3 border rounded ${
-                            currentProfitData && currentProfitData.totalProfit >= 0
-                                ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'
-                                : 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'
-                        }`}>
-                            <p className={`text-sm font-medium mb-2 ${
-                                currentProfitData && currentProfitData.totalProfit >= 0
-                                    ? 'text-green-800 dark:text-green-200'
-                                    : 'text-red-800 dark:text-red-200'
-                            }`}>
-                                <span className="font-semibold">Current Price:</span> {currentPrice ? formatUSD(currentPrice) : 'Loading...'}
-                            </p>
-                            <p className={`text-sm font-medium mb-1 ${
-                                currentProfitData && currentProfitData.totalProfit >= 0
-                                    ? 'text-green-800 dark:text-green-200'
-                                    : 'text-red-800 dark:text-red-200'
-                            }`}>
-                                <span className="font-semibold">
-                                    {currentProfitData && currentProfitData.totalProfit >= 0 ? 'Estimated Profit:' : 'Estimated Loss:'}
-                                </span> {currentProfitData ? formatUSD(Math.abs(currentProfitData.totalProfit)) : 'Calculating...'}
-                            </p>
-                            {(() => {
-                                const percentages = calculateProfitPercentages(crypto, currentProfitData);
-                                return percentages && currentProfitData ? (
-                                    <div className="flex flex-wrap gap-2 mt-2">
-                                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                                            currentProfitData.totalProfit >= 0
-                                                ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
-                                                : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
-                                        }`}>
-                                            Trade P/L: {percentages.tradeProfitPercentage >= 0 ? '+' : ''}{percentages.tradeProfitPercentage.toFixed(2)}%
-                                        </span>
-                                        {parseCurrencyInput(accountSize) > 0 && (
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                                                currentProfitData.totalProfit >= 0
-                                                    ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
-                                                    : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+                    {(() => {
+                        // Count how many breakeven cards will be displayed in the right column
+                        let breakevenCardCount = 0;
+                        if (longBreakevenPrice !== null) breakevenCardCount++;
+                        if (shortBreakevenPrice !== null) breakevenCardCount++;
+                        if (breakevenPrice !== null && longBreakevenPrice !== null && shortBreakevenPrice !== null) breakevenCardCount++;
+
+                        // Show liquidation in left column when there are 3 breakeven cards (both long and short positions)
+                        const showLiquidationInLeftColumn = breakevenCardCount === 3;
+
+                        return (
+                            <div className="mb-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
+                                {/* Left Column: Current Price and conditionally Liquidation Price */}
+                                <div className="space-y-3">
+                                    {/* Current Price and Profit/Loss - Height equivalent to 2 cards with spacing between them */}
+                                    {/* Each card is approximately 4rem tall, spacing is 0.75rem (space-y-3) */}
+                                    {/* Total: 4rem + 0.75rem + 4rem = 8.75rem */}
+                                    <div className={`p-3 border rounded flex flex-col justify-between min-h-[9rem] ${
+                                        currentProfitData && currentProfitData.totalProfit >= 0
+                                            ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'
+                                            : 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'
+                                    }`}>
+                                        <div>
+                                            <p className={`text-sm font-medium mb-2 ${
+                                                currentProfitData && currentProfitData.totalProfit >= 0
+                                                    ? 'text-green-800 dark:text-green-200'
+                                                    : 'text-red-800 dark:text-red-200'
                                             }`}>
-                                                Account P/L: {percentages.accountProfitPercentage >= 0 ? '+' : ''}{percentages.accountProfitPercentage.toFixed(2)}%
-                                            </span>
-                                        )}
+                                                <span className="font-semibold">Current Price:</span> {currentPrice ? formatUSD(currentPrice) : 'Loading...'}
+                                            </p>
+                                            <p className={`text-sm font-medium mb-1 ${
+                                                currentProfitData && currentProfitData.totalProfit >= 0
+                                                    ? 'text-green-800 dark:text-green-200'
+                                                    : 'text-red-800 dark:text-red-200'
+                                            }`}>
+                                                <span className="font-semibold">
+                                                    {currentProfitData && currentProfitData.totalProfit >= 0 ? 'Estimated Profit:' : 'Estimated Loss:'}
+                                                </span> {currentProfitData ? formatUSD(Math.abs(currentProfitData.totalProfit)) : 'Calculating...'}
+                                            </p>
+                                            {(() => {
+                                                const percentages = calculateProfitPercentages(crypto, currentProfitData);
+                                                return percentages && currentProfitData ? (
+                                                    <div className="flex flex-wrap gap-2 mt-2">
+                                                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                                                            currentProfitData.totalProfit >= 0
+                                                                ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
+                                                                : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+                                                        }`}>
+                                                            Trade P/L: {percentages.tradeProfitPercentage >= 0 ? '+' : ''}{percentages.tradeProfitPercentage.toFixed(2)}%
+                                                        </span>
+                                                        {parseCurrencyInput(accountSize) > 0 && (
+                                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                                                                currentProfitData.totalProfit >= 0
+                                                                    ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
+                                                                    : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+                                                            }`}>
+                                                                Account P/L: {percentages.accountProfitPercentage >= 0 ? '+' : ''}{percentages.accountProfitPercentage.toFixed(2)}%
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                ) : null;
+                                            })()}
+                                        </div>
+                                        <p className={`text-xs mt-2 ${
+                                            currentProfitData && currentProfitData.totalProfit >= 0
+                                                ? 'text-green-600 dark:text-green-300'
+                                                : 'text-red-600 dark:text-red-300'
+                                        }`}>
+                                            {lastPriceUpdate ? `Updated: ${lastPriceUpdate.toLocaleTimeString()}` : 'Fetching live price...'}
+                                        </p>
                                     </div>
-                                ) : null;
-                            })()}
-                            <p className={`text-xs mt-2 ${
-                                currentProfitData && currentProfitData.totalProfit >= 0
-                                    ? 'text-green-600 dark:text-green-300'
-                                    : 'text-red-600 dark:text-red-300'
-                            }`}>
-                                {lastPriceUpdate ? `Updated: ${lastPriceUpdate.toLocaleTimeString()}` : 'Fetching live price...'}
-                            </p>
-                        </div>
 
-                        {/* Breakeven and Liquidation Prices - Stacked vertically in right column, spans 2 columns */}
-                        <div className="lg:col-span-2 space-y-4">
-                            {/* Breakeven Price */}
-                            {breakevenPrice !== null ? (
-                                <div className="p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded">
-                                    <p className="text-sm font-medium text-blue-800 dark:text-blue-200">
-                                        <span className="font-semibold">Breakeven Price:</span> {formatUSD(breakevenPrice)}
-                                    </p>
-                                    <p className="text-xs text-blue-600 dark:text-blue-300 mt-1">
-                                        Price where all {crypto} positions break even
-                                    </p>
+                                    {/* Liquidation Price - only show in left column when there are 3 breakeven cards */}
+                                    {showLiquidationInLeftColumn && (
+                                        liquidationPrice !== null ? (
+                                            <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded">
+                                                <p className="text-sm font-medium text-red-800 dark:text-red-200">
+                                                    <span className="font-semibold">Liquidation Price:</span> {formatUSD(liquidationPrice)}
+                                                </p>
+                                                <p className="text-xs text-red-600 dark:text-red-300 mt-1">
+                                                    Price where entire {crypto} position gets liquidated
+                                                </p>
+                                            </div>
+                                        ) : (
+                                            <div className="p-3 bg-gray-100 dark:bg-gray-600 border border-gray-300 dark:border-gray-500 rounded">
+                                                <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                                                    <span className="font-semibold">Liquidation Price:</span> N/A
+                                                </p>
+                                                <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+                                                    Positions are perfectly hedged
+                                                </p>
+                                            </div>
+                                        )
+                                    )}
                                 </div>
-                            ) : (
-                                <div className="p-3 bg-gray-100 dark:bg-gray-600 border border-gray-300 dark:border-gray-500 rounded">
-                                    <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                                        <span className="font-semibold">Breakeven Price:</span> N/A
-                                    </p>
-                                    <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
-                                        Positions are perfectly hedged
-                                    </p>
-                                </div>
-                            )}
 
-                            {/* Liquidation Price */}
-                            {liquidationPrice !== null ? (
-                                <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded">
-                                    <p className="text-sm font-medium text-red-800 dark:text-red-200">
-                                        <span className="font-semibold">Liquidation Price:</span> {formatUSD(liquidationPrice)}
-                                    </p>
-                                    <p className="text-xs text-red-600 dark:text-red-300 mt-1">
-                                        Price where entire {crypto} position gets liquidated
-                                    </p>
+                                {/* Right Column: Breakeven Prices and conditionally Liquidation Price */}
+                                <div className="space-y-3">
+                                    {/* Long Breakeven Price - only show if there are long positions */}
+                                    {longBreakevenPrice !== null && (
+                                        <div className="p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded">
+                                            <p className="text-sm font-medium text-green-800 dark:text-green-200">
+                                                <span className="font-semibold">Long Breakeven:</span> {formatUSD(longBreakevenPrice)}
+                                            </p>
+                                            <p className="text-xs text-green-600 dark:text-green-300 mt-1">
+                                                Price where long {crypto} positions break even
+                                            </p>
+                                        </div>
+                                    )}
+
+                                    {/* Short Breakeven Price - only show if there are short positions */}
+                                    {shortBreakevenPrice !== null && (
+                                        <div className="p-3 bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 rounded">
+                                            <p className="text-sm font-medium text-orange-800 dark:text-orange-200">
+                                                <span className="font-semibold">Short Breakeven:</span> {formatUSD(shortBreakevenPrice)}
+                                            </p>
+                                            <p className="text-xs text-orange-600 dark:text-orange-300 mt-1">
+                                                Price where short {crypto} positions break even
+                                            </p>
+                                        </div>
+                                    )}
+
+                                    {/* Overall Breakeven Price - only show if there are both long and short positions */}
+                                    {breakevenPrice !== null && longBreakevenPrice !== null && shortBreakevenPrice !== null && (
+                                        <div className="p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded">
+                                            <p className="text-sm font-medium text-blue-800 dark:text-blue-200">
+                                                <span className="font-semibold">Net Breakeven:</span> {formatUSD(breakevenPrice)}
+                                            </p>
+                                            <p className="text-xs text-blue-600 dark:text-blue-300 mt-1">
+                                                Price where net {crypto} position breaks even
+                                            </p>
+                                        </div>
+                                    )}
+
+                                    {/* Liquidation Price - show in right column when there are fewer than 3 breakeven cards */}
+                                    {!showLiquidationInLeftColumn && (
+                                        liquidationPrice !== null ? (
+                                            <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded">
+                                                <p className="text-sm font-medium text-red-800 dark:text-red-200">
+                                                    <span className="font-semibold">Liquidation Price:</span> {formatUSD(liquidationPrice)}
+                                                </p>
+                                                <p className="text-xs text-red-600 dark:text-red-300 mt-1">
+                                                    Price where entire {crypto} position gets liquidated
+                                                </p>
+                                            </div>
+                                        ) : (
+                                            <div className="p-3 bg-gray-100 dark:bg-gray-600 border border-gray-300 dark:border-gray-500 rounded">
+                                                <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                                                    <span className="font-semibold">Liquidation Price:</span> N/A
+                                                </p>
+                                                <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+                                                    Positions are perfectly hedged
+                                                </p>
+                                            </div>
+                                        )
+                                    )}
                                 </div>
-                            ) : (
-                                <div className="p-3 bg-gray-100 dark:bg-gray-600 border border-gray-300 dark:border-gray-500 rounded">
-                                    <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                                        <span className="font-semibold">Liquidation Price:</span> N/A
-                                    </p>
-                                    <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
-                                        Positions are perfectly hedged
-                                    </p>
-                                </div>
-                            )}
-                        </div>
-                    </div>
+                            </div>
+                        );
+                    })()}
 
                     {/* Add Target input - only show when expanded */}
                     {isExpanded && (
@@ -1496,63 +1718,67 @@
                             {/* Expanded view - full details */}
                             {isExpanded && (
                                 <div className="space-y-3">
-                                    {Object.values(priceTargets).map((target) => (
-                                        <div key={target.id} className="relative p-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded">
-                                            {/* Close button */}
-                                            <button
-                                                onClick={() => removePriceTarget(target.id)}
-                                                className="absolute top-2 right-2 w-6 h-6 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition flex items-center justify-center text-lg font-normal"
-                                                title="Remove target"
-                                            >
-                                                ×
-                                            </button>
+                                    {Object.values(priceTargets).map((target) => {
+                                        const groupedProfitData = calculateGroupedProfit(target.targetPrice);
+                                        return (
+                                            <div key={target.id} className="relative p-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded">
+                                                {/* Close button */}
+                                                <button
+                                                    onClick={() => removePriceTarget(target.id)}
+                                                    className="absolute top-2 right-2 w-6 h-6 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition flex items-center justify-center text-lg font-normal"
+                                                    title="Remove target"
+                                                >
+                                                    ×
+                                                </button>
 
-                                            <p className="font-semibold mb-2 pr-8">Profits at {formatUSD(target.targetPrice)}:</p>
-                                            <div className="space-y-1 text-sm">
-                                                {target.profitData.profits.map((item, index) => (
-                                                    <p key={index} className="flex justify-between">
-                                                        <span>
-                                                            {item.direction.charAt(0).toUpperCase() + item.direction.slice(1)} trade (Entry {formatUSD(item.entryPrice)}):
-                                                        </span>
-                                                        <span className={`font-medium ${item.profit >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
-                                                            {formatUSD(item.profit)}
+                                                <p className="font-semibold mb-2 pr-8">Profits at {formatUSD(target.targetPrice)}:</p>
+                                                <div className="space-y-1 text-sm">
+                                                    {groupedProfitData.groupedProfits.map((group, index) => (
+                                                        <p key={index} className="flex justify-between">
+                                                            <span>
+                                                                {group.direction.charAt(0).toUpperCase() + group.direction.slice(1)} positions
+                                                                ({group.tradeCount} trade{group.tradeCount > 1 ? 's' : ''}, Avg Entry {formatUSD(group.avgEntryPrice)}):
+                                                            </span>
+                                                            <span className={`font-medium ${group.totalProfit >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                                                                {formatUSD(group.totalProfit)}
+                                                            </span>
+                                                        </p>
+                                                    ))}
+                                                </div>
+                                                <div className="mt-3 pt-2 border-t border-gray-200 dark:border-gray-600">
+                                                    <p className="flex justify-between font-semibold">
+                                                        <span>Total Profit for {crypto}:</span>
+                                                        <span className={`${groupedProfitData.totalProfit >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                                                            {formatUSD(groupedProfitData.totalProfit)}
                                                         </span>
                                                     </p>
-                                                ))}
-                                            </div>
-                                            <div className="mt-3 pt-2 border-t border-gray-200 dark:border-gray-600">
-                                                <p className="flex justify-between font-semibold">
-                                                    <span>Total Profit for {crypto}:</span>
-                                                    <span className={`${target.profitData.totalProfit >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
-                                                        {formatUSD(target.profitData.totalProfit)}
-                                                    </span>
-                                                </p>
-                                                {(() => {
-                                                    const percentages = calculateProfitPercentages(crypto, target.profitData);
-                                                    return percentages ? (
-                                                        <div className="flex flex-wrap gap-2 mt-2">
-                                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                                                                target.profitData.totalProfit >= 0
-                                                                    ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
-                                                                    : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
-                                                            }`}>
-                                                                Trade P/L: {percentages.tradeProfitPercentage >= 0 ? '+' : ''}{percentages.tradeProfitPercentage.toFixed(2)}%
-                                                            </span>
-                                                            {parseCurrencyInput(accountSize) > 0 && (
+                                                    {(() => {
+                                                        const percentages = calculateProfitPercentages(crypto, { totalProfit: groupedProfitData.totalProfit });
+                                                        return percentages ? (
+                                                            <div className="flex flex-wrap gap-2 mt-2">
                                                                 <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                                                                    target.profitData.totalProfit >= 0
+                                                                    groupedProfitData.totalProfit >= 0
                                                                         ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
                                                                         : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
                                                                 }`}>
-                                                                    Account P/L: {percentages.accountProfitPercentage >= 0 ? '+' : ''}{percentages.accountProfitPercentage.toFixed(2)}%
+                                                                    Trade P/L: {percentages.tradeProfitPercentage >= 0 ? '+' : ''}{percentages.tradeProfitPercentage.toFixed(2)}%
                                                                 </span>
-                                                            )}
-                                                        </div>
-                                                    ) : null;
-                                                })()}
+                                                                {parseCurrencyInput(accountSize) > 0 && (
+                                                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                                                                        groupedProfitData.totalProfit >= 0
+                                                                            ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
+                                                                            : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+                                                                    }`}>
+                                                                        Account P/L: {percentages.accountProfitPercentage >= 0 ? '+' : ''}{percentages.accountProfitPercentage.toFixed(2)}%
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                        ) : null;
+                                                    })()}
+                                                </div>
                                             </div>
-                                        </div>
-                                    ))}
+                                        );
+                                    })}
                                 </div>
                             )}
 
@@ -1560,7 +1786,8 @@
                             {!isExpanded && (
                                 <div className="space-y-2">
                                     {Object.values(priceTargets).map((target) => {
-                                        const percentages = calculateProfitPercentages(crypto, target.profitData);
+                                        const groupedProfitData = calculateGroupedProfit(target.targetPrice);
+                                        const percentages = calculateProfitPercentages(crypto, { totalProfit: groupedProfitData.totalProfit });
                                         return (
                                             <div key={target.id} className="relative p-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded">
                                                 {/* Close button in upper right corner */}
@@ -1582,16 +1809,16 @@
                                                 {/* Badges below the price target */}
                                                 <div className="flex flex-wrap gap-2">
                                                     <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium whitespace-nowrap ${
-                                                        target.profitData.totalProfit >= 0
+                                                        groupedProfitData.totalProfit >= 0
                                                             ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
                                                             : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
                                                     }`}>
-                                                        Total {formatUSD(target.profitData.totalProfit)}
+                                                        Total {formatUSD(groupedProfitData.totalProfit)}
                                                     </span>
                                                     {percentages && (
                                                         <>
                                                             <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium whitespace-nowrap ${
-                                                                target.profitData.totalProfit >= 0
+                                                                groupedProfitData.totalProfit >= 0
                                                                     ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
                                                                     : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
                                                             }`}>
@@ -1599,7 +1826,7 @@
                                                             </span>
                                                             {parseCurrencyInput(accountSize) > 0 && (
                                                                 <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium whitespace-nowrap ${
-                                                                    target.profitData.totalProfit >= 0
+                                                                    groupedProfitData.totalProfit >= 0
                                                                         ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
                                                                         : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
                                                                 }`}>
