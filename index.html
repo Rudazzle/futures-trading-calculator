@@ -70,6 +70,8 @@
             return {
                 id: generateAccountId(),
                 name: name,
+                baseAccountSize: '',
+                additionalFunds: '',
                 accountSize: '',
                 trades: [],
                 priceTargets: {},
@@ -84,7 +86,28 @@
             // Check if we already have the new account structure
             const existingAccounts = localStorage.getItem('accounts');
             if (existingAccounts) {
-                return JSON.parse(existingAccounts);
+                const accounts = JSON.parse(existingAccounts);
+                // Migrate existing accounts to include baseAccountSize and additionalFunds if they don't have them
+                let needsUpdate = false;
+                Object.keys(accounts).forEach(accountId => {
+                    const account = accounts[accountId];
+                    if (account.baseAccountSize === undefined) {
+                        account.baseAccountSize = account.accountSize || '';
+                        account.additionalFunds = '';
+                        needsUpdate = true;
+                    } else if (!account.baseAccountSize || account.baseAccountSize === '' || account.baseAccountSize === '0' || account.baseAccountSize === '0.00') {
+                        // If baseAccountSize is empty or $0, use the accountSize value
+                        if (account.accountSize && account.accountSize !== '' && account.accountSize !== '0' && account.accountSize !== '0.00') {
+                            account.baseAccountSize = account.accountSize;
+                            account.additionalFunds = account.additionalFunds || '';
+                            needsUpdate = true;
+                        }
+                    }
+                });
+                if (needsUpdate) {
+                    localStorage.setItem('accounts', JSON.stringify(accounts));
+                }
+                return accounts;
             }
 
             // Migrate existing data to new structure
@@ -99,7 +122,11 @@
             const mainAccount = createDefaultAccount('Main Account');
 
             // Migrate existing data if it exists
-            if (legacyAccountSize) mainAccount.accountSize = legacyAccountSize;
+            if (legacyAccountSize) {
+                mainAccount.baseAccountSize = legacyAccountSize;
+                mainAccount.additionalFunds = '';
+                mainAccount.accountSize = legacyAccountSize;
+            }
             if (legacyTrades) {
                 const parsedTrades = JSON.parse(legacyTrades);
                 mainAccount.trades = parsedTrades.map(trade => ({
@@ -141,7 +168,9 @@
             const currentAccount = accounts[currentAccountId] || createDefaultAccount();
 
             // Account-scoped state derived from current account
-            const [accountSize, setAccountSize] = useState(currentAccount.accountSize);
+            const [baseAccountSize, setBaseAccountSize] = useState(currentAccount.baseAccountSize || '');
+            const [additionalFunds, setAdditionalFunds] = useState(currentAccount.additionalFunds || '');
+            const [accountSize, setAccountSize] = useState(currentAccount.accountSize || '');
             const [trades, setTrades] = useState(currentAccount.trades);
             const [priceTargets, setPriceTargets] = useState(currentAccount.priceTargets);
             const [portfolioTargets, setPortfolioTargets] = useState(currentAccount.portfolioTargets);
@@ -189,9 +218,18 @@
                 localStorage.setItem('theme', theme);
             }, [theme]);
 
+            // Effect to calculate total account size when base or additional funds change
+            useEffect(() => {
+                const baseValue = parseCurrencyInput(baseAccountSize);
+                const additionalValue = parseCurrencyInput(additionalFunds);
+                const totalValue = baseValue + additionalValue;
+                const formattedTotal = totalValue > 0 ? formatCurrencyInput(totalValue.toString()) : '';
+                setAccountSize(formattedTotal);
+            }, [baseAccountSize, additionalFunds]);
+
             // Effects for account-scoped data - update current account when state changes
             useEffect(() => {
-                updateCurrentAccountData({ accountSize });
+                updateCurrentAccountData({ baseAccountSize, additionalFunds, accountSize });
                 // Recalculate liquidation prices when account size changes
                 if (trades.length > 0) {
                     const updatedTrades = trades.map(trade => ({
@@ -257,7 +295,9 @@
                 setCurrentAccountId(newAccount.id);
 
                 // Update all account-scoped state to reflect the new account
-                setAccountSize(newAccount.accountSize);
+                setBaseAccountSize(newAccount.baseAccountSize || '');
+                setAdditionalFunds(newAccount.additionalFunds || '');
+                setAccountSize(newAccount.accountSize || '');
                 setTrades(newAccount.trades);
                 setPriceTargets(newAccount.priceTargets);
                 setPortfolioTargets(newAccount.portfolioTargets);
@@ -278,7 +318,9 @@
 
                     // Update all account-scoped state
                     const account = accounts[accountId];
-                    setAccountSize(account.accountSize);
+                    setBaseAccountSize(account.baseAccountSize || '');
+                    setAdditionalFunds(account.additionalFunds || '');
+                    setAccountSize(account.accountSize || '');
                     setTrades(account.trades);
                     setPriceTargets(account.priceTargets);
                     setPortfolioTargets(account.portfolioTargets);
@@ -329,7 +371,9 @@
 
                     // Update all account-scoped state to the new current account
                     const newAccount = updatedAccounts[newCurrentAccountId];
-                    setAccountSize(newAccount.accountSize);
+                    setBaseAccountSize(newAccount.baseAccountSize || '');
+                    setAdditionalFunds(newAccount.additionalFunds || '');
+                    setAccountSize(newAccount.accountSize || '');
                     setTrades(newAccount.trades);
                     setPriceTargets(newAccount.priceTargets);
                     setPortfolioTargets(newAccount.portfolioTargets);
@@ -856,16 +900,37 @@
                                 </span>
                             </div>
                         </div>
-                        <div className="flex flex-col sm:flex-row sm:items-center space-y-2 sm:space-y-0 sm:space-x-4">
-                            <label htmlFor="account-size" className="text-lg font-semibold whitespace-nowrap">Account Size (USD)</label>
-                            <input
-                                id="account-size"
-                                type="text"
-                                placeholder="0.00"
-                                className="flex-1 p-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 min-w-0"
-                                value={accountSize}
-                                onChange={(e) => setAccountSize(formatCurrencyInput(e.target.value))}
-                            />
+                        <div className="space-y-2 sm:space-y-3">
+                            <div className="flex flex-row items-center space-x-2 sm:space-x-4">
+                                <label htmlFor="base-account-size" className="text-xs sm:text-lg font-semibold whitespace-nowrap w-32 sm:w-48 flex-shrink-0">Account Size (USD)</label>
+                                <input
+                                    id="base-account-size"
+                                    type="text"
+                                    placeholder="0.00"
+                                    className="flex-1 p-1 sm:p-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 min-w-0 text-sm sm:text-base"
+                                    value={baseAccountSize}
+                                    onChange={(e) => setBaseAccountSize(formatCurrencyInput(e.target.value))}
+                                />
+                            </div>
+                            <div className="flex flex-row items-center space-x-2 sm:space-x-4">
+                                <label htmlFor="additional-funds" className="text-xs sm:text-lg font-semibold whitespace-nowrap w-32 sm:w-48 flex-shrink-0">Additional Funds</label>
+                                <input
+                                    id="additional-funds"
+                                    type="text"
+                                    placeholder="0.00"
+                                    className="flex-1 p-1 sm:p-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 min-w-0 text-sm sm:text-base"
+                                    value={additionalFunds}
+                                    onChange={(e) => setAdditionalFunds(formatCurrencyInput(e.target.value))}
+                                />
+                            </div>
+                            {(parseCurrencyInput(baseAccountSize) > 0 || parseCurrencyInput(additionalFunds) > 0) && (
+                                <div className="flex flex-row items-center space-x-2 sm:space-x-4 pt-2 border-t dark:border-gray-600">
+                                    <span className="text-xs sm:text-lg font-semibold whitespace-nowrap w-32 sm:w-48 flex-shrink-0">Total Account Size</span>
+                                    <div className="flex-1 p-1 sm:p-2 bg-gray-100 dark:bg-gray-700 rounded border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-gray-100 font-semibold text-sm sm:text-base">
+                                        {formatUSD(parseCurrencyInput(accountSize))}
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     </div>
 
